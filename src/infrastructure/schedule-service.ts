@@ -9,6 +9,7 @@ const logger = createModuleLogger('schedule-service');
 
 interface ScheduleRow {
   trip_id: string;
+  trip_short_name: string | null;
   route_id: string;
   route_long_name: string;
   trip_headsign: string | null;
@@ -110,6 +111,7 @@ export class ScheduleService {
     const query = `
       SELECT
         t.trip_id,
+        t.trip_short_name,
         t.route_id,
         r.route_long_name,
         t.trip_headsign,
@@ -141,16 +143,18 @@ export class ScheduleService {
       let status: DepartureInfo['status'] = 'unknown';
 
       if (includeRealtime && realtimeClient.isAvailable()) {
-        delayMinutes = await realtimeClient.getDelayForTripAtStop(row.trip_id, station.stop_id);
-      }
-
-      // Determine status
-      if (delayMinutes === null) {
-        status = 'unknown';
-      } else if (delayMinutes <= 0) {
-        status = 'on_time';
-      } else if (delayMinutes > 0) {
-        status = 'delayed';
+        // Use trip_short_name (train number) to match realtime data
+        const realtimeInfo = await realtimeClient.getRealtimeInfoForTripAtStop(
+          row.trip_id, 
+          station.stop_id,
+          row.departure_time,
+          row.trip_short_name || undefined
+        );
+        
+        if (realtimeInfo.delaySeconds !== null) {
+          delayMinutes = Math.round(realtimeInfo.delaySeconds / 60);
+        }
+        status = realtimeInfo.status as DepartureInfo['status'];
       }
 
       // Get destination stops

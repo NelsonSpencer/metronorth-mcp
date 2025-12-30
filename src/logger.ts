@@ -1,6 +1,7 @@
 import pino from 'pino';
 import { config } from './config.js';
 
+// MCP uses stdout for JSON-RPC, so logs must go to stderr
 export const logger = pino({
   level: config.LOG_LEVEL,
   transport:
@@ -11,9 +12,13 @@ export const logger = pino({
             colorize: true,
             translateTime: 'SYS:standard',
             ignore: 'pid,hostname',
+            destination: 2, // stderr
           },
         }
-      : undefined,
+      : {
+          target: 'pino/file',
+          options: { destination: 2 }, // stderr
+        },
   base: {
     service: 'metronorth-mcp',
     version: '2.0.0',

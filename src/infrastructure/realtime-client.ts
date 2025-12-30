@@ -1,9 +1,12 @@
 import axios from 'axios';
+import GtfsRealtimeBindings from 'gtfs-realtime-bindings';
 import { GTFS_REALTIME_URL, GTFS_ALERTS_URL } from '../config.js';
 import { createModuleLogger } from '../logger.js';
 import { getSqlite, transaction } from './database.js';
 import { getCache, CACHE_KEYS } from './cache.js';
 import type { TripUpdate, ServiceAlert } from '../domain/gtfs.js';
+
+const { transit_realtime } = GtfsRealtimeBindings;
 
 const logger = createModuleLogger('realtime');
 
@@ -105,24 +108,81 @@ export class MetroNorthRealtime {
     try {
       const response = await axios.get(GTFS_REALTIME_URL, {
         timeout: 15000,
+        responseType: 'arraybuffer',
         headers: {
           'User-Agent': 'MetroNorth-MCP/2.0.0',
-          Accept: 'application/json',
-        },
-        // MTA API returns protobuf, but we can request JSON
-        params: {
-          format: 'json',
         },
       });
 
-      // Handle both JSON and protobuf responses
-      if (typeof response.data === 'object') {
-        return response.data as FeedMessage;
-      }
-
-      // If protobuf, try to decode
-      logger.debug('Received protobuf response, attempting to parse');
-      return null;
+      // Decode protobuf response
+      const feed = transit_realtime.FeedMessage.decode(new Uint8Array(response.data));
+      
+      // Convert to our internal format
+      return {
+        header: {
+          gtfsRealtimeVersion: feed.header?.gtfsRealtimeVersion || '2.0',
+          incrementality: feed.header?.incrementality || 0,
+          timestamp: String(feed.header?.timestamp || ''),
+        },
+        entity: (feed.entity || []).map((e) => ({
+          id: e.id || '',
+          isDeleted: e.isDeleted || false,
+          tripUpdate: e.tripUpdate ? {
+            trip: {
+              tripId: e.tripUpdate.trip?.tripId || '',
+              routeId: e.tripUpdate.trip?.routeId || undefined,
+              startTime: e.tripUpdate.trip?.startTime || undefined,
+              startDate: e.tripUpdate.trip?.startDate || undefined,
+              scheduleRelationship: String(e.tripUpdate.trip?.scheduleRelationship || ''),
+            },
+            vehicle: e.tripUpdate.vehicle ? {
+              id: e.tripUpdate.vehicle.id || undefined,
+              label: e.tripUpdate.vehicle.label || undefined,
+            } : undefined,
+            stopTimeUpdate: (e.tripUpdate.stopTimeUpdate || []).map((stu) => ({
+              stopSequence: stu.stopSequence || undefined,
+              stopId: stu.stopId || undefined,
+              arrival: stu.arrival ? {
+                delay: stu.arrival.delay || undefined,
+                time: stu.arrival.time ? String(stu.arrival.time) : undefined,
+              } : undefined,
+              departure: stu.departure ? {
+                delay: stu.departure.delay || undefined,
+                time: stu.departure.time ? String(stu.departure.time) : undefined,
+              } : undefined,
+              scheduleRelationship: String(stu.scheduleRelationship || ''),
+            })),
+            timestamp: e.tripUpdate.timestamp ? String(e.tripUpdate.timestamp) : undefined,
+          } : undefined,
+          alert: e.alert ? {
+            activePeriod: (e.alert.activePeriod || []).map((ap) => ({
+              start: ap.start ? String(ap.start) : undefined,
+              end: ap.end ? String(ap.end) : undefined,
+            })),
+            informedEntity: (e.alert.informedEntity || []).map((ie) => ({
+              agencyId: ie.agencyId || undefined,
+              routeId: ie.routeId || undefined,
+              routeType: ie.routeType || undefined,
+              trip: ie.trip ? { tripId: ie.trip.tripId || undefined } : undefined,
+              stopId: ie.stopId || undefined,
+            })),
+            cause: String(e.alert.cause || ''),
+            effect: String(e.alert.effect || ''),
+            headerText: e.alert.headerText ? {
+              translation: (e.alert.headerText.translation || []).map((t) => ({
+                text: t.text || '',
+                language: t.language || undefined,
+              })),
+            } : undefined,
+            descriptionText: e.alert.descriptionText ? {
+              translation: (e.alert.descriptionText.translation || []).map((t) => ({
+                text: t.text || '',
+                language: t.language || undefined,
+              })),
+            } : undefined,
+          } : undefined,
+        })),
+      };
     } catch (error) {
       if (axios.isAxiosError(error)) {
         logger.error(
@@ -130,7 +190,8 @@ export class MetroNorthRealtime {
           'Failed to fetch trip updates'
         );
       } else {
-        logger.error({ error }, 'Failed to fetch trip updates');
+        const msg = error instanceof Error ? error.message : String(error);
+        logger.error({ error: msg }, 'Failed to fetch/parse trip updates');
       }
       return null;
     }
@@ -140,20 +201,59 @@ export class MetroNorthRealtime {
     try {
       const response = await axios.get(GTFS_ALERTS_URL, {
         timeout: 15000,
+        responseType: 'arraybuffer',
         headers: {
           'User-Agent': 'MetroNorth-MCP/2.0.0',
-          Accept: 'application/json',
-        },
-        params: {
-          format: 'json',
         },
       });
 
-      if (typeof response.data === 'object') {
-        return response.data as FeedMessage;
-      }
-
-      return null;
+      // Decode protobuf response
+      const feed = transit_realtime.FeedMessage.decode(new Uint8Array(response.data));
+      
+      return {
+        header: {
+          gtfsRealtimeVersion: feed.header?.gtfsRealtimeVersion || '2.0',
+          incrementality: feed.header?.incrementality || 0,
+          timestamp: String(feed.header?.timestamp || ''),
+        },
+        entity: (feed.entity || []).map((e) => ({
+          id: e.id || '',
+          isDeleted: e.isDeleted || false,
+          alert: e.alert ? {
+            activePeriod: (e.alert.activePeriod || []).map((ap) => ({
+              start: ap.start ? String(ap.start) : undefined,
+              end: ap.end ? String(ap.end) : undefined,
+            })),
+            informedEntity: (e.alert.informedEntity || []).map((ie) => ({
+              agencyId: ie.agencyId || undefined,
+              routeId: ie.routeId || undefined,
+              routeType: ie.routeType || undefined,
+              trip: ie.trip ? { tripId: ie.trip.tripId || undefined } : undefined,
+              stopId: ie.stopId || undefined,
+            })),
+            cause: String(e.alert.cause || ''),
+            effect: String(e.alert.effect || ''),
+            url: e.alert.url ? {
+              translation: (e.alert.url.translation || []).map((t) => ({
+                text: t.text || '',
+                language: t.language || undefined,
+              })),
+            } : undefined,
+            headerText: e.alert.headerText ? {
+              translation: (e.alert.headerText.translation || []).map((t) => ({
+                text: t.text || '',
+                language: t.language || undefined,
+              })),
+            } : undefined,
+            descriptionText: e.alert.descriptionText ? {
+              translation: (e.alert.descriptionText.translation || []).map((t) => ({
+                text: t.text || '',
+                language: t.language || undefined,
+              })),
+            } : undefined,
+          } : undefined,
+        })),
+      };
     } catch (error) {
       if (axios.isAxiosError(error)) {
         logger.error(
@@ -161,7 +261,8 @@ export class MetroNorthRealtime {
           'Failed to fetch alerts'
         );
       } else {
-        logger.error({ error }, 'Failed to fetch alerts');
+        const msg = error instanceof Error ? error.message : String(error);
+        logger.error({ error: msg }, 'Failed to fetch/parse alerts');
       }
       return null;
     }
@@ -187,6 +288,7 @@ export class MetroNorthRealtime {
       if (entity.tripUpdate) {
         const tu = entity.tripUpdate;
         updates.push({
+          train_number: entity.id, // The entity ID is the train number for MNR
           trip_id: tu.trip.tripId,
           route_id: tu.trip.routeId || null,
           start_time: tu.trip.startTime || null,
@@ -240,6 +342,7 @@ export class MetroNorthRealtime {
     for (const row of rows) {
       if (!grouped.has(row.trip_id)) {
         grouped.set(row.trip_id, {
+          train_number: row.trip_id, // Use trip_id as fallback for train_number
           trip_id: row.trip_id,
           route_id: null,
           start_time: null,
@@ -349,9 +452,17 @@ export class MetroNorthRealtime {
     return alerts;
   }
 
-  async getDelayForTrip(tripId: string): Promise<number | null> {
+  async getDelayForTrip(tripId: string, trainNumber?: string): Promise<number | null> {
     const updates = await this.getTripUpdates();
-    const tripUpdate = updates.find((u) => u.trip_id === tripId);
+    
+    // Try matching by train number (entity ID) first, then trip_id
+    let tripUpdate = trainNumber 
+      ? updates.find((u) => u.train_number === trainNumber)
+      : null;
+    
+    if (!tripUpdate) {
+      tripUpdate = updates.find((u) => u.trip_id === tripId);
+    }
 
     if (!tripUpdate || tripUpdate.stop_time_updates.length === 0) {
       return null;
@@ -368,9 +479,17 @@ export class MetroNorthRealtime {
     return Math.max(...delays);
   }
 
-  async getDelayForTripAtStop(tripId: string, stopId: string): Promise<number | null> {
+  async getDelayForTripAtStop(tripId: string, stopId: string, trainNumber?: string): Promise<number | null> {
     const updates = await this.getTripUpdates();
-    const tripUpdate = updates.find((u) => u.trip_id === tripId);
+    
+    // Try matching by train number (entity ID) first, then trip_id  
+    let tripUpdate = trainNumber 
+      ? updates.find((u) => u.train_number === trainNumber)
+      : null;
+    
+    if (!tripUpdate) {
+      tripUpdate = updates.find((u) => u.trip_id === tripId);
+    }
 
     if (!tripUpdate) return null;
 
@@ -378,7 +497,59 @@ export class MetroNorthRealtime {
 
     if (!stopUpdate) return null;
 
-    return stopUpdate.departure_delay ?? stopUpdate.arrival_delay ?? null;
+    // MTA provides delay in seconds, or we can calculate from absolute timestamps
+    if (stopUpdate.departure_delay !== null && stopUpdate.departure_delay !== undefined) {
+      return stopUpdate.departure_delay;
+    }
+    if (stopUpdate.arrival_delay !== null && stopUpdate.arrival_delay !== undefined) {
+      return stopUpdate.arrival_delay;
+    }
+    
+    return null;
+  }
+  
+  /**
+   * Get realtime arrival/departure info for a trip at a stop
+   * Returns status info including whether the train is on time, delayed, etc.
+   */
+  async getRealtimeInfoForTripAtStop(
+    tripId: string, 
+    stopId: string, 
+    _scheduledDepartureTime: string,
+    trainNumber?: string
+  ): Promise<{ delaySeconds: number | null; status: string; actualTime: string | null }> {
+    const updates = await this.getTripUpdates();
+    
+    // Try matching by train number (entity ID) first
+    let tripUpdate = trainNumber 
+      ? updates.find((u) => u.train_number === trainNumber)
+      : null;
+    
+    if (!tripUpdate) {
+      tripUpdate = updates.find((u) => u.trip_id === tripId);
+    }
+
+    if (!tripUpdate) {
+      return { delaySeconds: null, status: 'unknown', actualTime: null };
+    }
+
+    const stopUpdate = tripUpdate.stop_time_updates.find((stu) => stu.stop_id === stopId);
+
+    if (!stopUpdate) {
+      // Train exists in realtime but this stop not found - assume on time
+      return { delaySeconds: 0, status: 'on_time', actualTime: null };
+    }
+
+    // Check for explicit delay values first
+    const delaySeconds = stopUpdate.departure_delay ?? stopUpdate.arrival_delay ?? null;
+    
+    if (delaySeconds !== null) {
+      const status = delaySeconds <= 60 ? 'on_time' : 'delayed';
+      return { delaySeconds, status, actualTime: null };
+    }
+
+    // No explicit delay - train is tracked and on time
+    return { delaySeconds: 0, status: 'on_time', actualTime: null };
   }
 }
 

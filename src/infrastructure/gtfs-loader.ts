@@ -24,10 +24,9 @@ const REQUIRED_FILES = [
   'routes.txt',
   'trips.txt',
   'stop_times.txt',
-  'calendar.txt',
 ];
 
-// Optional files: calendar_dates.txt
+// Optional files: calendar.txt, calendar_dates.txt (at least one should be present)
 
 interface ParsedGTFS {
   agency: Agency[];
@@ -324,7 +323,8 @@ export class GTFSLoader {
 
       return true;
     } catch (error) {
-      logger.error({ error }, 'Failed to update GTFS static data');
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error({ error: message }, 'Failed to update GTFS static data');
       throw error;
     }
   }

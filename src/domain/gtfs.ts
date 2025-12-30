@@ -99,6 +99,7 @@ export interface TripUpdate {
   stop_time_updates: StopTimeUpdate[];
   timestamp: number | null;
   vehicle_id: string | null;
+  train_number: string; // The entity ID from GTFS-RT, which is the train number for MNR
 }
 
 export interface StopTimeUpdate {

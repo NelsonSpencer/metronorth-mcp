@@ -28,8 +28,10 @@ function loadConfig() {
 export const config = loadConfig();
 
 // GTFS Data Sources (MTA public feeds - no API key required)
-export const GTFS_STATIC_URL = 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/mnr%2Fgtfs-mnr';
-export const GTFS_REALTIME_URL = 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/mnr%2Fgtfs-mnr-tripupdates';
+// Static data from MTA S3 bucket (updated frequently)
+export const GTFS_STATIC_URL = 'https://rrgtfsfeeds.s3.amazonaws.com/gtfsmnr.zip';
+// Realtime GTFS-RT feeds (protobuf format, no API key required)
+export const GTFS_REALTIME_URL = 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/mnr%2Fgtfs-mnr';
 export const GTFS_ALERTS_URL = 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fall-alerts';
 
 // Metro-North Route Mappings
