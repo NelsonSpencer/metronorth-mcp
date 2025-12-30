@@ -4,7 +4,6 @@ import { z } from 'zod';
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
-  MTA_API_KEY: z.string().optional(),
   REDIS_URL: z.string().url().optional(),
   DB_PATH: z.string().default('./db/metronorth.db'),
   GTFS_UPDATE_INTERVAL_HOURS: z.coerce.number().default(24),
@@ -28,11 +27,10 @@ function loadConfig() {
 
 export const config = loadConfig();
 
-// GTFS Data Sources
-export const GTFS_STATIC_URL = 'http://web.mta.info/developers/data/mnr/google_transit.zip';
-
-export const getRealtimeFeedUrl = (apiKey: string) =>
-  `https://mnorth.prod.acquia-sites.com/wse/gtfsrtwebapi/v1/gtfsrt/${apiKey}/getfeed`;
+// GTFS Data Sources (MTA public feeds - no API key required)
+export const GTFS_STATIC_URL = 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/mnr%2Fgtfs-mnr';
+export const GTFS_REALTIME_URL = 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/mnr%2Fgtfs-mnr-tripupdates';
+export const GTFS_ALERTS_URL = 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fall-alerts';
 
 // Metro-North Route Mappings
 export const ROUTE_NAMES: Record<string, string> = {

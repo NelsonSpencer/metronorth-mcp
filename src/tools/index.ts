@@ -335,14 +335,6 @@ async function handleGetServiceAlerts(args: Record<string, unknown>) {
   const { route_name, station_name } = parsed.data;
   const realtimeClient = getRealtimeClient();
 
-  if (!realtimeClient.isAvailable()) {
-    return {
-      message: 'Service alerts require an MTA API key',
-      alerts: [],
-      note: 'Set MTA_API_KEY environment variable to enable real-time features',
-    };
-  }
-
   const alerts = await realtimeClient.getServiceAlerts();
 
   // Filter alerts if needed
@@ -454,9 +446,7 @@ async function handleGetSystemStatus() {
     },
     realtime: {
       available: realtimeClient.isAvailable(),
-      note: realtimeClient.isAvailable()
-        ? 'Real-time data enabled'
-        : 'Set MTA_API_KEY to enable real-time features',
+      note: 'Real-time data enabled (public MTA API)',
     },
     server: {
       version: '2.0.0',

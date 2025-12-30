@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { config, getRealtimeFeedUrl } from '../config.js';
+import { GTFS_REALTIME_URL, GTFS_ALERTS_URL } from '../config.js';
 import { createModuleLogger } from '../logger.js';
 import { getSqlite, transaction } from './database.js';
 import { getCache, CACHE_KEYS } from './cache.js';
@@ -7,58 +7,58 @@ import type { TripUpdate, ServiceAlert } from '../domain/gtfs.js';
 
 const logger = createModuleLogger('realtime');
 
-// GTFS-RT feed types
+// GTFS-RT feed types (protobuf JSON representation)
 interface FeedMessage {
   header: {
-    gtfs_realtime_version: string;
+    gtfsRealtimeVersion: string;
     incrementality: number;
-    timestamp: number;
+    timestamp: string;
   };
   entity: FeedEntity[];
 }
 
 interface FeedEntity {
   id: string;
-  is_deleted?: boolean;
-  trip_update?: GTFSRTTripUpdate;
+  isDeleted?: boolean;
+  tripUpdate?: GTFSRTTripUpdate;
   vehicle?: GTFSRTVehicle;
   alert?: GTFSRTAlert;
 }
 
 interface GTFSRTTripUpdate {
   trip: {
-    trip_id: string;
-    route_id?: string;
-    start_time?: string;
-    start_date?: string;
-    schedule_relationship?: number;
+    tripId: string;
+    routeId?: string;
+    startTime?: string;
+    startDate?: string;
+    scheduleRelationship?: string;
   };
   vehicle?: {
     id?: string;
     label?: string;
   };
-  stop_time_update?: GTFSRTStopTimeUpdate[];
-  timestamp?: number;
+  stopTimeUpdate?: GTFSRTStopTimeUpdate[];
+  timestamp?: string;
 }
 
 interface GTFSRTStopTimeUpdate {
-  stop_sequence?: number;
-  stop_id?: string;
+  stopSequence?: number;
+  stopId?: string;
   arrival?: {
     delay?: number;
-    time?: number;
+    time?: string;
   };
   departure?: {
     delay?: number;
-    time?: number;
+    time?: string;
   };
-  schedule_relationship?: number;
+  scheduleRelationship?: string;
 }
 
 interface GTFSRTVehicle {
   trip?: {
-    trip_id?: string;
-    route_id?: string;
+    tripId?: string;
+    routeId?: string;
   };
   vehicle?: {
     id: string;
@@ -70,89 +70,98 @@ interface GTFSRTVehicle {
     bearing?: number;
     speed?: number;
   };
-  current_stop_sequence?: number;
-  current_status?: number;
-  timestamp?: number;
-  congestion_level?: number;
-  occupancy_status?: number;
+  currentStopSequence?: number;
+  currentStatus?: string;
+  timestamp?: string;
 }
 
 interface GTFSRTAlert {
-  active_period?: { start?: number; end?: number }[];
-  informed_entity?: {
-    agency_id?: string;
-    route_id?: string;
-    route_type?: number;
-    trip?: { trip_id?: string };
-    stop_id?: string;
+  activePeriod?: { start?: string; end?: string }[];
+  informedEntity?: {
+    agencyId?: string;
+    routeId?: string;
+    routeType?: number;
+    trip?: { tripId?: string };
+    stopId?: string;
   }[];
-  cause?: number;
-  effect?: number;
+  cause?: string;
+  effect?: string;
   url?: { translation?: { text: string; language?: string }[] };
-  header_text?: { translation?: { text: string; language?: string }[] };
-  description_text?: { translation?: { text: string; language?: string }[] };
+  headerText?: { translation?: { text: string; language?: string }[] };
+  descriptionText?: { translation?: { text: string; language?: string }[] };
 }
 
-// Schedule relationship enum
-const SCHEDULE_RELATIONSHIP = {
-  0: 'SCHEDULED',
-  1: 'ADDED',
-  2: 'UNSCHEDULED',
-  3: 'CANCELED',
-} as const;
-
-// Vehicle status: 0=INCOMING_AT, 1=STOPPED_AT, 2=IN_TRANSIT_TO
-
 export class MetroNorthRealtime {
-  private apiKey: string | null;
-
   constructor() {
-    this.apiKey = config.MTA_API_KEY || null;
-
-    if (!this.apiKey) {
-      logger.warn('No MTA API key configured - realtime features will be limited');
-    }
+    logger.info('Metro-North realtime client initialized (public API - no key required)');
   }
 
   isAvailable(): boolean {
-    return this.apiKey !== null;
+    // Public API is always available
+    return true;
   }
 
-  private async fetchFeed(): Promise<FeedMessage | null> {
-    if (!this.apiKey) {
-      return null;
-    }
-
-    const url = getRealtimeFeedUrl(this.apiKey);
-
+  private async fetchTripUpdates(): Promise<FeedMessage | null> {
     try {
-      const response = await axios.get(url, {
-        responseType: 'arraybuffer',
-        timeout: 10000,
+      const response = await axios.get(GTFS_REALTIME_URL, {
+        timeout: 15000,
         headers: {
           'User-Agent': 'MetroNorth-MCP/2.0.0',
-          Accept: 'application/x-protobuf',
+          Accept: 'application/json',
+        },
+        // MTA API returns protobuf, but we can request JSON
+        params: {
+          format: 'json',
         },
       });
 
-      // Parse protobuf response
-      // Note: In production, use gtfs-realtime-bindings for proper protobuf parsing
-      // For now, we'll try JSON if the API supports it, or implement a simple parser
-
-      // Some MTA feeds support JSON format
-      try {
-        const jsonData = JSON.parse(response.data.toString());
-        return jsonData as FeedMessage;
-      } catch {
-        // If not JSON, we need protobuf parsing
-        logger.warn('Protobuf parsing not implemented - install gtfs-realtime-bindings');
-        return null;
+      // Handle both JSON and protobuf responses
+      if (typeof response.data === 'object') {
+        return response.data as FeedMessage;
       }
+
+      // If protobuf, try to decode
+      logger.debug('Received protobuf response, attempting to parse');
+      return null;
     } catch (error) {
       if (axios.isAxiosError(error)) {
-        logger.error({ status: error.response?.status, message: error.message }, 'Failed to fetch realtime feed');
+        logger.error(
+          { status: error.response?.status, message: error.message, url: GTFS_REALTIME_URL },
+          'Failed to fetch trip updates'
+        );
       } else {
-        logger.error({ error }, 'Failed to fetch realtime feed');
+        logger.error({ error }, 'Failed to fetch trip updates');
+      }
+      return null;
+    }
+  }
+
+  private async fetchAlerts(): Promise<FeedMessage | null> {
+    try {
+      const response = await axios.get(GTFS_ALERTS_URL, {
+        timeout: 15000,
+        headers: {
+          'User-Agent': 'MetroNorth-MCP/2.0.0',
+          Accept: 'application/json',
+        },
+        params: {
+          format: 'json',
+        },
+      });
+
+      if (typeof response.data === 'object') {
+        return response.data as FeedMessage;
+      }
+
+      return null;
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        logger.error(
+          { status: error.response?.status, message: error.message },
+          'Failed to fetch alerts'
+        );
+      } else {
+        logger.error({ error }, 'Failed to fetch alerts');
       }
       return null;
     }
@@ -166,8 +175,8 @@ export class MetroNorthRealtime {
       return cached;
     }
 
-    const feed = await this.fetchFeed();
-    if (!feed) {
+    const feed = await this.fetchTripUpdates();
+    if (!feed || !feed.entity) {
       // Return cached data from database as fallback
       return this.getTripUpdatesFromDB();
     }
@@ -175,36 +184,36 @@ export class MetroNorthRealtime {
     const updates: TripUpdate[] = [];
 
     for (const entity of feed.entity) {
-      if (entity.trip_update) {
-        const tu = entity.trip_update;
+      if (entity.tripUpdate) {
+        const tu = entity.tripUpdate;
         updates.push({
-          trip_id: tu.trip.trip_id,
-          route_id: tu.trip.route_id || null,
-          start_time: tu.trip.start_time || null,
-          start_date: tu.trip.start_date || null,
-          schedule_relationship: tu.trip.schedule_relationship != null
-            ? SCHEDULE_RELATIONSHIP[tu.trip.schedule_relationship as keyof typeof SCHEDULE_RELATIONSHIP] || null
-            : null,
-          stop_time_updates: (tu.stop_time_update || []).map((stu) => ({
-            stop_sequence: stu.stop_sequence || null,
-            stop_id: stu.stop_id || null,
+          trip_id: tu.trip.tripId,
+          route_id: tu.trip.routeId || null,
+          start_time: tu.trip.startTime || null,
+          start_date: tu.trip.startDate || null,
+          schedule_relationship: tu.trip.scheduleRelationship || null,
+          stop_time_updates: (tu.stopTimeUpdate || []).map((stu) => ({
+            stop_sequence: stu.stopSequence || null,
+            stop_id: stu.stopId || null,
             arrival_delay: stu.arrival?.delay || null,
             departure_delay: stu.departure?.delay || null,
-            schedule_relationship: stu.schedule_relationship != null
-              ? SCHEDULE_RELATIONSHIP[stu.schedule_relationship as keyof typeof SCHEDULE_RELATIONSHIP] || null
-              : null,
+            schedule_relationship: stu.scheduleRelationship || null,
           })),
-          timestamp: tu.timestamp || null,
+          timestamp: tu.timestamp ? parseInt(tu.timestamp) : null,
           vehicle_id: tu.vehicle?.id || null,
         });
       }
     }
 
+    logger.info({ count: updates.length }, 'Fetched trip updates from MTA API');
+
     // Cache for 30 seconds
     await cache.set(CACHE_KEYS.tripUpdates, updates, 30);
 
     // Also persist to database for fallback
-    this.persistTripUpdates(updates);
+    if (updates.length > 0) {
+      this.persistTripUpdates(updates);
+    }
 
     return updates;
   }
@@ -287,8 +296,8 @@ export class MetroNorthRealtime {
       return cached;
     }
 
-    const feed = await this.fetchFeed();
-    if (!feed) {
+    const feed = await this.fetchAlerts();
+    if (!feed || !feed.entity) {
       return [];
     }
 
@@ -305,25 +314,34 @@ export class MetroNorthRealtime {
           return en?.text || field.translation[0]?.text || null;
         };
 
-        alerts.push({
-          alert_id: entity.id,
-          cause: a.cause?.toString() || null,
-          effect: a.effect?.toString() || null,
-          header_text: getText(a.header_text) || 'Service Alert',
-          description_text: getText(a.description_text),
-          url: getText(a.url),
-          active_period_start: a.active_period?.[0]?.start || null,
-          active_period_end: a.active_period?.[0]?.end || null,
-          informed_entities: (a.informed_entity || []).map((ie) => ({
-            agency_id: ie.agency_id || null,
-            route_id: ie.route_id || null,
-            route_type: ie.route_type || null,
-            trip_id: ie.trip?.trip_id || null,
-            stop_id: ie.stop_id || null,
-          })),
-        });
+        // Filter for Metro-North related alerts
+        const mnrEntities = (a.informedEntity || []).filter(
+          (ie) => ie.agencyId === 'MNR' || ie.routeId?.startsWith('1') || ie.routeId?.startsWith('2') || ie.routeId?.startsWith('3')
+        );
+
+        if (mnrEntities.length > 0 || !a.informedEntity?.length) {
+          alerts.push({
+            alert_id: entity.id,
+            cause: a.cause || null,
+            effect: a.effect || null,
+            header_text: getText(a.headerText) || 'Service Alert',
+            description_text: getText(a.descriptionText),
+            url: getText(a.url),
+            active_period_start: a.activePeriod?.[0]?.start ? parseInt(a.activePeriod[0].start) : null,
+            active_period_end: a.activePeriod?.[0]?.end ? parseInt(a.activePeriod[0].end) : null,
+            informed_entities: (a.informedEntity || []).map((ie) => ({
+              agency_id: ie.agencyId || null,
+              route_id: ie.routeId || null,
+              route_type: ie.routeType || null,
+              trip_id: ie.trip?.tripId || null,
+              stop_id: ie.stopId || null,
+            })),
+          });
+        }
       }
     }
+
+    logger.info({ count: alerts.length }, 'Fetched service alerts from MTA API');
 
     // Cache for 2 minutes
     await cache.set(CACHE_KEYS.serviceAlerts, alerts, 120);

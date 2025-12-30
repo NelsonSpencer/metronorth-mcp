@@ -5,10 +5,12 @@ A production-grade Model Context Protocol (MCP) server for Metro-North Railroad 
 ## Features
 
 - **Real-time departures**: Get upcoming train departures from any Metro-North station
-- **Live status updates**: Track delays and service disruptions (requires MTA API key)
+- **Live status updates**: Track delays and service disruptions
 - **Station search**: Fuzzy search for station names
 - **Route schedules**: View full schedules for any Metro-North line
 - **Service alerts**: Get current service advisories and alerts
+
+> **Note**: This server uses the public MTA API - no API key required!
 
 ## Quick Start
 
@@ -42,9 +44,6 @@ npm start
 Create a `.env` file with the following options:
 
 ```env
-# Required for real-time features
-MTA_API_KEY=your_api_key_here
-
 # Optional: Redis for distributed caching
 REDIS_URL=redis://localhost:6379
 
@@ -52,7 +51,7 @@ REDIS_URL=redis://localhost:6379
 DB_PATH=./db/metronorth.db
 ```
 
-Get your MTA API key at: https://api.mta.info/#/signup
+No API key is required - the MTA now provides public access to all GTFS feeds.
 
 ## MCP Integration
 
@@ -65,10 +64,7 @@ Add to your Claude Desktop configuration (`~/Library/Application Support/Claude/
   "mcpServers": {
     "metronorth": {
       "command": "node",
-      "args": ["/path/to/metronorth-mcp/build/index.js"],
-      "env": {
-        "MTA_API_KEY": "your_api_key"
-      }
+      "args": ["/path/to/metronorth-mcp/build/index.js"]
     }
   }
 }
