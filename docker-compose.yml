@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  metronorth-mcp:
+    build: .
+    container_name: metronorth-mcp
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - LOG_LEVEL=info
+      - MTA_API_KEY=${MTA_API_KEY:-}
+      - REDIS_URL=redis://redis:6379
+      - DB_PATH=/app/db/metronorth.db
+    volumes:
+      - metronorth-data:/app/data
+      - metronorth-db:/app/db
+    depends_on:
+      - redis
+    networks:
+      - metronorth-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: metronorth-redis
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    networks:
+      - metronorth-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  metronorth-data:
+  metronorth-db:
+  redis-data:
+
+networks:
+  metronorth-network:
+    driver: bridge
