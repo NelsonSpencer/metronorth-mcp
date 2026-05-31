@@ -180,6 +180,7 @@ function initializeSchema() {
     CREATE INDEX IF NOT EXISTS idx_trips_service ON trips(service_id);
     CREATE INDEX IF NOT EXISTS idx_calendar_dates_date ON calendar_dates(date);
     CREATE INDEX IF NOT EXISTS idx_realtime_trip ON realtime_updates(trip_id);
+    CREATE INDEX IF NOT EXISTS idx_realtime_updated_at ON realtime_updates(updated_at);
   `);
 
   logger.info('Database schema initialized');
