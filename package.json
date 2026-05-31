@@ -5,8 +5,16 @@
   "type": "module",
   "main": "build/index.js",
   "bin": {
-    "metronorth-mcp": "./build/index.js"
+    "metronorth-mcp": "build/index.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NelsonSpencer/metronorth-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/NelsonSpencer/metronorth-mcp/issues"
+  },
+  "homepage": "https://github.com/NelsonSpencer/metronorth-mcp#readme",
   "files": [
     "build",
     ".env.example",
