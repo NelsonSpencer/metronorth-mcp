@@ -1,6 +1,6 @@
 import axios from 'axios';
 import GtfsRealtimeBindings from 'gtfs-realtime-bindings';
-import { GTFS_REALTIME_URL, GTFS_ALERTS_URL } from '../config.js';
+import { GTFS_REALTIME_URL, GTFS_ALERTS_URL, ROUTE_NAMES } from '../config.js';
 import { createModuleLogger } from '../logger.js';
 import { getSqlite, transaction } from './database.js';
 import { getCache, CACHE_KEYS } from './cache.js';
@@ -9,6 +9,8 @@ import type { TripUpdate, ServiceAlert } from '../domain/gtfs.js';
 const { transit_realtime } = GtfsRealtimeBindings;
 
 const logger = createModuleLogger('realtime');
+const METRO_NORTH_ROUTE_IDS = new Set(Object.keys(ROUTE_NAMES));
+const REALTIME_FALLBACK_TTL_MINUTES = 5;
 
 // GTFS-RT feed types (protobuf JSON representation)
 interface FeedMessage {
@@ -92,6 +94,15 @@ interface GTFSRTAlert {
   url?: { translation?: { text: string; language?: string }[] };
   headerText?: { translation?: { text: string; language?: string }[] };
   descriptionText?: { translation?: { text: string; language?: string }[] };
+}
+
+type RealtimeStopInfo = { delaySeconds: number | null; status: string; actualTime: string | null };
+
+function isMetroNorthAlertEntity(entity: NonNullable<GTFSRTAlert['informedEntity']>[number]) {
+  return (
+    entity.agencyId === 'MNR' ||
+    (entity.routeId !== undefined && METRO_NORTH_ROUTE_IDS.has(entity.routeId))
+  );
 }
 
 export class MetroNorthRealtime {
@@ -313,9 +324,7 @@ export class MetroNorthRealtime {
     await cache.set(CACHE_KEYS.tripUpdates, updates, 30);
 
     // Also persist to database for fallback
-    if (updates.length > 0) {
-      this.persistTripUpdates(updates);
-    }
+    this.persistTripUpdates(updates);
 
     return updates;
   }
@@ -370,6 +379,13 @@ export class MetroNorthRealtime {
     const sqlite = getSqlite();
 
     transaction(() => {
+      sqlite
+        .prepare(
+          `DELETE FROM realtime_updates
+           WHERE updated_at <= datetime('now', '-${REALTIME_FALLBACK_TTL_MINUTES} minutes')`
+        )
+        .run();
+
       const insert = sqlite.prepare(`
         INSERT OR REPLACE INTO realtime_updates (trip_id, stop_id, arrival_delay, departure_delay, schedule_relationship, updated_at)
         VALUES (?, ?, ?, ?, ?, datetime('now'))
@@ -418,9 +434,7 @@ export class MetroNorthRealtime {
         };
 
         // Filter for Metro-North related alerts
-        const mnrEntities = (a.informedEntity || []).filter(
-          (ie) => ie.agencyId === 'MNR' || ie.routeId?.startsWith('1') || ie.routeId?.startsWith('2') || ie.routeId?.startsWith('3')
-        );
+        const mnrEntities = (a.informedEntity || []).filter(isMetroNorthAlertEntity);
 
         if (mnrEntities.length > 0 || !a.informedEntity?.length) {
           alerts.push({
@@ -454,15 +468,7 @@ export class MetroNorthRealtime {
 
   async getDelayForTrip(tripId: string, trainNumber?: string): Promise<number | null> {
     const updates = await this.getTripUpdates();
-    
-    // Try matching by train number (entity ID) first, then trip_id
-    let tripUpdate = trainNumber 
-      ? updates.find((u) => u.train_number === trainNumber)
-      : null;
-    
-    if (!tripUpdate) {
-      tripUpdate = updates.find((u) => u.trip_id === tripId);
-    }
+    const tripUpdate = this.findTripUpdate(updates, tripId, trainNumber);
 
     if (!tripUpdate || tripUpdate.stop_time_updates.length === 0) {
       return null;
@@ -481,15 +487,7 @@ export class MetroNorthRealtime {
 
   async getDelayForTripAtStop(tripId: string, stopId: string, trainNumber?: string): Promise<number | null> {
     const updates = await this.getTripUpdates();
-    
-    // Try matching by train number (entity ID) first, then trip_id  
-    let tripUpdate = trainNumber 
-      ? updates.find((u) => u.train_number === trainNumber)
-      : null;
-    
-    if (!tripUpdate) {
-      tripUpdate = updates.find((u) => u.trip_id === tripId);
-    }
+    const tripUpdate = this.findTripUpdate(updates, tripId, trainNumber);
 
     if (!tripUpdate) return null;
 
@@ -517,17 +515,25 @@ export class MetroNorthRealtime {
     stopId: string, 
     _scheduledDepartureTime: string,
     trainNumber?: string
-  ): Promise<{ delaySeconds: number | null; status: string; actualTime: string | null }> {
+  ): Promise<RealtimeStopInfo> {
     const updates = await this.getTripUpdates();
-    
-    // Try matching by train number (entity ID) first
-    let tripUpdate = trainNumber 
-      ? updates.find((u) => u.train_number === trainNumber)
-      : null;
-    
-    if (!tripUpdate) {
-      tripUpdate = updates.find((u) => u.trip_id === tripId);
-    }
+    return this.getRealtimeInfoForTripAtStopFromUpdates(
+      updates,
+      tripId,
+      stopId,
+      _scheduledDepartureTime,
+      trainNumber
+    );
+  }
+
+  getRealtimeInfoForTripAtStopFromUpdates(
+    updates: TripUpdate[],
+    tripId: string,
+    stopId: string,
+    _scheduledDepartureTime: string,
+    trainNumber?: string
+  ): RealtimeStopInfo {
+    const tripUpdate = this.findTripUpdate(updates, tripId, trainNumber);
 
     if (!tripUpdate) {
       return { delaySeconds: null, status: 'unknown', actualTime: null };
@@ -550,6 +556,17 @@ export class MetroNorthRealtime {
 
     // No explicit delay - train is tracked and on time
     return { delaySeconds: 0, status: 'on_time', actualTime: null };
+  }
+
+  private findTripUpdate(
+    updates: TripUpdate[],
+    tripId: string,
+    trainNumber?: string
+  ): TripUpdate | undefined {
+    return (
+      (trainNumber ? updates.find((u) => u.train_number === trainNumber) : undefined) ||
+      updates.find((u) => u.trip_id === tripId)
+    );
   }
 }
 
