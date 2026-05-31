@@ -46,6 +46,11 @@ async function main() {
       'resources/list did not include system status'
     );
     assertIncludes(
+      resources.resources.map((resource) => resource.uri),
+      'metronorth://usage',
+      'resources/list did not include usage guide'
+    );
+    assertIncludes(
       resourceTemplates.resourceTemplates.map((template) => template.uriTemplate),
       'metronorth://station/{station_name}',
       'resources/templates/list did not include station template'
@@ -54,6 +59,11 @@ async function main() {
       prompts.prompts.map((prompt) => prompt.name),
       'plan-metro-north-trip',
       'prompts/list did not include plan-metro-north-trip'
+    );
+    assertIncludes(
+      prompts.prompts.map((prompt) => prompt.name),
+      'use-metro-north-mcp',
+      'prompts/list did not include use-metro-north-mcp'
     );
 
     const status = await client.callTool(
@@ -72,6 +82,21 @@ async function main() {
     });
     if (!systemResource.contents[0]?.text.includes('gtfs_data')) {
       throw new Error('system status resource did not include GTFS data');
+    }
+
+    const usageResource = await client.readResource({
+      uri: 'metronorth://usage',
+    });
+    if (!usageResource.contents[0]?.text.includes('search_stations')) {
+      throw new Error('usage resource did not include station-search guidance');
+    }
+
+    const usagePrompt = await client.getPrompt({
+      name: 'use-metro-north-mcp',
+      arguments: {},
+    });
+    if (!usagePrompt.messages[0]?.content || usagePrompt.messages[0].content.type !== 'text') {
+      throw new Error('use-metro-north-mcp did not return a text prompt message');
     }
 
     const prompt = await client.getPrompt({

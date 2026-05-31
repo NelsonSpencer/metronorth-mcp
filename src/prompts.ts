@@ -3,6 +3,12 @@ import type { GetPromptResult, ListPromptsResult } from '@modelcontextprotocol/s
 
 export const promptDefinitions: ListPromptsResult['prompts'] = [
   {
+    name: 'use-metro-north-mcp',
+    title: 'Use Metro-North MCP',
+    description: 'Guide an agent through the main Metro-North MCP tool workflows.',
+    arguments: [],
+  },
+  {
     name: 'plan-metro-north-trip',
     title: 'Plan Metro-North Trip',
     description:
@@ -50,6 +56,8 @@ export function handleGetPrompt(
   args: Record<string, string> = {}
 ): GetPromptResult {
   switch (name) {
+    case 'use-metro-north-mcp':
+      return useMetroNorthMcpPrompt();
     case 'plan-metro-north-trip':
       return planMetroNorthTripPrompt(args);
     case 'summarize-service-status':
@@ -68,6 +76,29 @@ function requireString(args: Record<string, string>, key: string): string {
   return value;
 }
 
+function useMetroNorthMcpPrompt(): GetPromptResult {
+  return {
+    description: 'Use Metro-North MCP tools, resources, and prompts effectively.',
+    messages: [
+      {
+        role: 'user',
+        content: {
+          type: 'text',
+          text: [
+            'Use the Metro-North MCP server for station lookup, departures, route schedules, alerts, and data freshness.',
+            'Search stations first when a station name may be partial or ambiguous.',
+            'Use get_departures for near-term station departure options.',
+            'Use get_route_schedule for route/date schedule views.',
+            'Use get_service_alerts for route or station disruptions.',
+            'Read metronorth://system/status when data freshness matters.',
+            'Mention that realtime departures and alerts are best-effort public feed data.',
+          ].join('\n'),
+        },
+      },
+    ],
+  };
+}
+
 function planMetroNorthTripPrompt(args: Record<string, string>): GetPromptResult {
   const origin = requireString(args, 'origin');
   const destination = requireString(args, 'destination');
@@ -83,8 +114,9 @@ function planMetroNorthTripPrompt(args: Record<string, string>): GetPromptResult
           text: [
             `Plan a Metro-North trip from "${origin}" to "${destination}".`,
             `Use direction "${direction}" unless station context suggests otherwise.`,
-            'First search for the origin and destination stations if the names may be partial.',
-            'Then check upcoming departures from the origin and current service alerts.',
+            'Search the origin and destination stations if either name may be partial or ambiguous.',
+            'Check upcoming departures from the origin.',
+            'Check current service alerts for relevant routes or stations.',
             'Summarize the best option, any uncertainty, and the realtime data caveat.',
           ].join('\n'),
         },
@@ -110,8 +142,8 @@ function summarizeServiceStatusPrompt(args: Record<string, string>): GetPromptRe
           text: [
             `Summarize Metro-North service status${scope ? ` for ${scope}` : ''}.`,
             'Check current service alerts first.',
-            'Use system status to explain data freshness when relevant.',
             'If a station is provided, include station-specific context.',
+            'Read system status if data freshness matters.',
             'Keep the answer practical for a commuter and call out realtime uncertainty.',
           ].join('\n'),
         },

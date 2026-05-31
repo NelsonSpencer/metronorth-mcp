@@ -65,6 +65,8 @@ vi.mock('../src/infrastructure/station-service.js', () => ({
 describe('MCP resources', () => {
   it('lists the static resources and station template', () => {
     expect(resourceDefinitions.map((resource) => resource.uri)).toEqual([
+      'metronorth://usage',
+      'metronorth://examples',
       'metronorth://system/status',
       'metronorth://routes',
       'metronorth://stations',
@@ -72,6 +74,18 @@ describe('MCP resources', () => {
     expect(resourceTemplateDefinitions[0].uriTemplate).toBe(
       'metronorth://station/{station_name}'
     );
+  });
+
+  it('reads agent usage resources as markdown', async () => {
+    const usage = await handleReadResource('metronorth://usage');
+    const examples = await handleReadResource('metronorth://examples');
+
+    expect(usage.contents[0].mimeType).toBe('text/markdown');
+    expect(usage.contents[0].text).toContain('search_stations');
+    expect(usage.contents[0].text).toContain('realtime');
+    expect(examples.contents[0].mimeType).toBe('text/markdown');
+    expect(examples.contents[0].text).toContain('get_departures');
+    expect(examples.contents[0].text).toContain('invalid station names');
   });
 
   it('reads the system status resource as JSON', async () => {
@@ -103,9 +117,18 @@ describe('MCP resources', () => {
 describe('MCP prompts', () => {
   it('lists the prompt templates', () => {
     expect(promptDefinitions.map((prompt) => prompt.name)).toEqual([
+      'use-metro-north-mcp',
       'plan-metro-north-trip',
       'summarize-service-status',
     ]);
+  });
+
+  it('returns the MCP usage prompt without arguments', () => {
+    const prompt = handleGetPrompt('use-metro-north-mcp');
+
+    expect(prompt.messages[0].content.type).toBe('text');
+    expect(prompt.messages[0].content.text).toContain('Search stations first');
+    expect(prompt.messages[0].content.text).toContain('metronorth://system/status');
   });
 
   it('returns the trip-planning prompt with provided arguments', () => {

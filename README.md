@@ -120,6 +120,22 @@ Full MCP config:
 }
 ```
 
+## Agent Usage
+
+This server exposes usage guidance through MCP:
+
+- Read `metronorth://usage` for the recommended station, trip-planning, alert, and freshness workflow.
+- Read `metronorth://examples` for common tool-call examples.
+- Use the `use-metro-north-mcp` prompt when an agent needs a quick operating guide.
+
+Recommended flow:
+
+1. Search stations first when names may be partial or ambiguous.
+2. Use `get_departures` for near-term train options.
+3. Use `get_service_alerts` for route or station disruptions.
+4. Read `metronorth://system/status` when data freshness matters.
+5. Treat realtime departures and alerts as best-effort public feed data.
+
 ## Tools
 
 Tool results include readable text and MCP `structuredContent`. Invalid inputs and unknown stations return structured errors.
@@ -149,6 +165,8 @@ Example:
 
 Resources:
 
+- `metronorth://usage`
+- `metronorth://examples`
 - `metronorth://system/status`
 - `metronorth://routes`
 - `metronorth://stations`
@@ -156,6 +174,7 @@ Resources:
 
 Prompts:
 
+- `use-metro-north-mcp`
 - `plan-metro-north-trip`
 - `summarize-service-status`
 

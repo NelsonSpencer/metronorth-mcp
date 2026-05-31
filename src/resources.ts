@@ -11,9 +11,24 @@ import { getGTFSLoader } from './infrastructure/gtfs-loader.js';
 import { getRealtimeClient } from './infrastructure/realtime-client.js';
 
 const JSON_MIME_TYPE = 'application/json';
+const MARKDOWN_MIME_TYPE = 'text/markdown';
 const STATION_URI_PREFIX = 'metronorth://station/';
 
 export const resourceDefinitions: ListResourcesResult['resources'] = [
+  {
+    uri: 'metronorth://usage',
+    name: 'usage',
+    title: 'Metro-North MCP Usage Guide',
+    description: 'Agent guide for using Metro-North tools, resources, and prompts.',
+    mimeType: MARKDOWN_MIME_TYPE,
+  },
+  {
+    uri: 'metronorth://examples',
+    name: 'examples',
+    title: 'Metro-North MCP Examples',
+    description: 'Practical examples for common Metro-North MCP workflows.',
+    mimeType: MARKDOWN_MIME_TYPE,
+  },
   {
     uri: 'metronorth://system/status',
     name: 'system-status',
@@ -48,6 +63,14 @@ export const resourceTemplateDefinitions: ListResourceTemplatesResult['resourceT
 ];
 
 export async function handleReadResource(uri: string): Promise<ReadResourceResult> {
+  if (uri === 'metronorth://usage') {
+    return textResource(uri, getUsageResource());
+  }
+
+  if (uri === 'metronorth://examples') {
+    return textResource(uri, getExamplesResource());
+  }
+
   if (uri === 'metronorth://system/status') {
     return jsonResource(uri, await getSystemStatusResource());
   }
@@ -68,6 +91,18 @@ export async function handleReadResource(uri: string): Promise<ReadResourceResul
   throw new McpError(ErrorCode.InvalidRequest, `Unknown resource URI: ${uri}`);
 }
 
+function textResource(uri: string, text: string): ReadResourceResult {
+  return {
+    contents: [
+      {
+        uri,
+        mimeType: MARKDOWN_MIME_TYPE,
+        text,
+      },
+    ],
+  };
+}
+
 function jsonResource(uri: string, value: unknown): ReadResourceResult {
   return {
     contents: [
@@ -78,6 +113,58 @@ function jsonResource(uri: string, value: unknown): ReadResourceResult {
       },
     ],
   };
+}
+
+function getUsageResource(): string {
+  return [
+    '# Metro-North MCP Usage',
+    '',
+    'Use this server for Metro-North station lookup, departures, route schedules, service alerts, and data freshness.',
+    '',
+    '## Station matching',
+    '',
+    '- Use `search_stations` first when a station name may be partial or ambiguous.',
+    '- Use the returned station name with `get_departures`, `get_station_info`, or station-specific alerts.',
+    '',
+    '## Trip planning',
+    '',
+    '1. Search the origin and destination stations.',
+    '2. Call `get_departures` for near-term options from the origin.',
+    '3. Call `get_service_alerts` for relevant route or station disruptions.',
+    '4. Summarize the best option, any uncertainty, and whether realtime data was available.',
+    '',
+    '## Service status',
+    '',
+    '- Use `get_service_alerts` for current route or station alerts.',
+    '- Read `metronorth://system/status` when data freshness matters.',
+    '- Treat realtime departures and alerts as best-effort public feed data.',
+  ].join('\n');
+}
+
+function getExamplesResource(): string {
+  return [
+    '# Metro-North MCP Examples',
+    '',
+    '## Find a station',
+    '',
+    'Call `search_stations` with `{ "query": "Grand Central", "limit": 5 }`.',
+    '',
+    '## Check outbound departures',
+    '',
+    'Call `get_departures` with `{ "station_name": "Grand Central", "direction": "outbound", "limit": 5, "include_realtime": true }`.',
+    '',
+    '## Summarize Harlem Line alerts',
+    '',
+    'Call `get_service_alerts` with `{ "route_name": "Harlem" }`.',
+    '',
+    '## Explain data freshness',
+    '',
+    'Read `metronorth://system/status` or call `get_system_status`.',
+    '',
+    '## Handle invalid station names',
+    '',
+    'If a station-specific tool returns a structured error, search stations and retry with the closest matching station name.',
+  ].join('\n');
 }
 
 async function getSystemStatusResource() {
