@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { handleToolCall, toolDefinitions } from '../src/tools/index.js';
+import { toolHandlers } from '../src/tools/handlers.js';
 import { packageMetadata } from '../src/package-metadata.js';
 
 // Mock the database and services for testing
@@ -67,6 +68,12 @@ describe('Tool Definitions', () => {
       expect(tool.description).toBeDefined();
       expect(tool.description.length).toBeGreaterThan(10);
     }
+  });
+
+  it('keeps tool definitions and handlers in sync', () => {
+    expect(Object.keys(toolHandlers).sort()).toEqual(
+      toolDefinitions.map((tool) => tool.name).sort()
+    );
   });
 });
 

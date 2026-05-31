@@ -137,4 +137,59 @@ describe('MetroNorthRealtime', () => {
     expect(dbRunMock).toHaveBeenCalledWith();
     expect(dbRunMock).toHaveBeenCalledWith('trip-1', 'GCT', null, 120, null);
   });
+
+  it('preserves explicit zero delays from realtime trip updates', async () => {
+    decodeMock.mockReturnValue({
+      entity: [
+        {
+          id: '456',
+          tripUpdate: {
+            trip: {
+              tripId: 'trip-1',
+              routeId: '2',
+            },
+            stopTimeUpdate: [
+              {
+                stopId: 'GCT',
+                arrival: { delay: 0 },
+              },
+              {
+                stopId: 'WP',
+                departure: { delay: 0 },
+              },
+            ],
+            timestamp: '1717000000',
+          },
+        },
+      ],
+    });
+
+    const { MetroNorthRealtime } = await import('../src/infrastructure/realtime-client.js');
+    const client = new MetroNorthRealtime();
+
+    const updates = await client.getTripUpdates();
+    const arrivalInfo = client.getRealtimeInfoForTripAtStopFromUpdates(
+      updates,
+      'trip-1',
+      'GCT',
+      '12:00:00',
+      '456'
+    );
+    const departureInfo = client.getRealtimeInfoForTripAtStopFromUpdates(
+      updates,
+      'trip-1',
+      'WP',
+      '12:30:00',
+      '456'
+    );
+
+    expect(updates[0].stop_time_updates).toEqual([
+      expect.objectContaining({ stop_id: 'GCT', arrival_delay: 0, departure_delay: null }),
+      expect.objectContaining({ stop_id: 'WP', arrival_delay: null, departure_delay: 0 }),
+    ]);
+    expect(arrivalInfo).toMatchObject({ delaySeconds: 0, status: 'on_time' });
+    expect(departureInfo).toMatchObject({ delaySeconds: 0, status: 'on_time' });
+    expect(dbRunMock).toHaveBeenCalledWith('trip-1', 'GCT', 0, null, null);
+    expect(dbRunMock).toHaveBeenCalledWith('trip-1', 'WP', null, 0, null);
+  });
 });

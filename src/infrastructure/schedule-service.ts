@@ -323,14 +323,20 @@ export class ScheduleService {
 
     // Get realtime data if available
     const realtimeClient = getRealtimeClient();
+    const realtimeUpdates =
+      includeRealtime && realtimeClient.isAvailable() ? await realtimeClient.getTripUpdates() : null;
     let realtimeStatus = null;
 
     const stops: TripStop[] = [];
     for (const row of stopRows) {
       let delayMinutes: number | null = null;
 
-      if (includeRealtime && realtimeClient.isAvailable()) {
-        delayMinutes = await realtimeClient.getDelayForTripAtStop(tripId, row.stop_id);
+      if (realtimeUpdates) {
+        delayMinutes = realtimeClient.getDelayForTripAtStopFromUpdates(
+          realtimeUpdates,
+          tripId,
+          row.stop_id
+        );
         if (delayMinutes !== null) {
           delayMinutes = Math.round(delayMinutes / 60);
         }
@@ -347,8 +353,8 @@ export class ScheduleService {
     }
 
     // Get overall trip delay
-    if (includeRealtime && realtimeClient.isAvailable()) {
-      const tripDelay = await realtimeClient.getDelayForTrip(tripId);
+    if (realtimeUpdates) {
+      const tripDelay = realtimeClient.getDelayForTripFromUpdates(realtimeUpdates, tripId);
       if (tripDelay !== null) {
         realtimeStatus = {
           delay_minutes: Math.round(tripDelay / 60),

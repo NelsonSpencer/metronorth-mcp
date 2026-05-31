@@ -155,11 +155,11 @@ export class MetroNorthRealtime {
               stopSequence: stu.stopSequence || undefined,
               stopId: stu.stopId || undefined,
               arrival: stu.arrival ? {
-                delay: stu.arrival.delay || undefined,
+                delay: stu.arrival.delay ?? undefined,
                 time: stu.arrival.time ? String(stu.arrival.time) : undefined,
               } : undefined,
               departure: stu.departure ? {
-                delay: stu.departure.delay || undefined,
+                delay: stu.departure.delay ?? undefined,
                 time: stu.departure.time ? String(stu.departure.time) : undefined,
               } : undefined,
               scheduleRelationship: String(stu.scheduleRelationship || ''),
@@ -309,8 +309,8 @@ export class MetroNorthRealtime {
           stop_time_updates: (tu.stopTimeUpdate || []).map((stu) => ({
             stop_sequence: stu.stopSequence || null,
             stop_id: stu.stopId || null,
-            arrival_delay: stu.arrival?.delay || null,
-            departure_delay: stu.departure?.delay || null,
+            arrival_delay: stu.arrival?.delay ?? null,
+            departure_delay: stu.departure?.delay ?? null,
             schedule_relationship: stu.scheduleRelationship || null,
           })),
           timestamp: tu.timestamp ? parseInt(tu.timestamp) : null,
@@ -469,6 +469,14 @@ export class MetroNorthRealtime {
 
   async getDelayForTrip(tripId: string, trainNumber?: string): Promise<number | null> {
     const updates = await this.getTripUpdates();
+    return this.getDelayForTripFromUpdates(updates, tripId, trainNumber);
+  }
+
+  getDelayForTripFromUpdates(
+    updates: TripUpdate[],
+    tripId: string,
+    trainNumber?: string
+  ): number | null {
     const tripUpdate = this.findTripUpdate(updates, tripId, trainNumber);
 
     if (!tripUpdate || tripUpdate.stop_time_updates.length === 0) {
@@ -488,6 +496,15 @@ export class MetroNorthRealtime {
 
   async getDelayForTripAtStop(tripId: string, stopId: string, trainNumber?: string): Promise<number | null> {
     const updates = await this.getTripUpdates();
+    return this.getDelayForTripAtStopFromUpdates(updates, tripId, stopId, trainNumber);
+  }
+
+  getDelayForTripAtStopFromUpdates(
+    updates: TripUpdate[],
+    tripId: string,
+    stopId: string,
+    trainNumber?: string
+  ): number | null {
     const tripUpdate = this.findTripUpdate(updates, tripId, trainNumber);
 
     if (!tripUpdate) return null;

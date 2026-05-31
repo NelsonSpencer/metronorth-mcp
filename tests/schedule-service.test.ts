@@ -8,6 +8,8 @@ const queryLog = vi.hoisted(() => ({
 const realtimeMocks = vi.hoisted(() => ({
   isAvailable: vi.fn(() => true),
   getTripUpdates: vi.fn(() => Promise.resolve([])),
+  getDelayForTripAtStopFromUpdates: vi.fn(() => 120),
+  getDelayForTripFromUpdates: vi.fn(() => 120),
   getRealtimeInfoForTripAtStopFromUpdates: vi.fn(() => ({
     delaySeconds: 300,
     status: 'delayed',
@@ -65,6 +67,40 @@ vi.mock('../src/infrastructure/database.js', () => {
     if (query.includes('FROM calendar_dates')) {
       return {
         all: vi.fn(() => []),
+      };
+    }
+
+    if (query.includes('SELECT t.trip_id, t.route_id') && query.includes('WHERE t.trip_id = ?')) {
+      return {
+        get: vi.fn(() => ({
+          trip_id: 'trip-details-1',
+          route_id: '2',
+          trip_headsign: 'White Plains',
+          direction_id: 0,
+          service_id: 'weekday',
+          route_long_name: 'Harlem',
+        })),
+      };
+    }
+
+    if (query.includes('SELECT s.stop_name, s.stop_id')) {
+      return {
+        all: vi.fn(() => [
+          {
+            stop_name: 'Grand Central Terminal',
+            stop_id: 'GCT',
+            arrival_time: '12:00:00',
+            departure_time: '12:00:00',
+            stop_sequence: 1,
+          },
+          {
+            stop_name: 'White Plains',
+            stop_id: 'WP',
+            arrival_time: '12:38:00',
+            departure_time: '12:38:00',
+            stop_sequence: 2,
+          },
+        ]),
       };
     }
 
@@ -151,6 +187,8 @@ vi.mock('../src/infrastructure/realtime-client.js', () => ({
   getRealtimeClient: vi.fn(() => ({
     isAvailable: realtimeMocks.isAvailable,
     getTripUpdates: realtimeMocks.getTripUpdates,
+    getDelayForTripAtStopFromUpdates: realtimeMocks.getDelayForTripAtStopFromUpdates,
+    getDelayForTripFromUpdates: realtimeMocks.getDelayForTripFromUpdates,
     getRealtimeInfoForTripAtStopFromUpdates:
       realtimeMocks.getRealtimeInfoForTripAtStopFromUpdates,
   })),
@@ -163,6 +201,10 @@ describe('ScheduleService', () => {
     realtimeMocks.isAvailable.mockClear();
     realtimeMocks.getTripUpdates.mockClear();
     realtimeMocks.getTripUpdates.mockResolvedValue([]);
+    realtimeMocks.getDelayForTripAtStopFromUpdates.mockClear();
+    realtimeMocks.getDelayForTripAtStopFromUpdates.mockReturnValue(120);
+    realtimeMocks.getDelayForTripFromUpdates.mockClear();
+    realtimeMocks.getDelayForTripFromUpdates.mockReturnValue(120);
     realtimeMocks.getRealtimeInfoForTripAtStopFromUpdates.mockClear();
     realtimeMocks.getRealtimeInfoForTripAtStopFromUpdates.mockReturnValue({
       delaySeconds: 300,
@@ -292,5 +334,19 @@ describe('ScheduleService', () => {
       )
     ).toBe(true);
     expect(queryLog.params.flat()).not.toContain(1000);
+  });
+
+  it('fetches realtime updates once for trip details', async () => {
+    const { ScheduleService } = await import('../src/infrastructure/schedule-service.js');
+    const service = new ScheduleService();
+
+    const details = await service.getTripDetails('trip-details-1', true);
+
+    expect(details?.stops).toHaveLength(2);
+    expect(details?.stops[0].delay_minutes).toBe(2);
+    expect(details?.realtime_status?.delay_minutes).toBe(2);
+    expect(realtimeMocks.getTripUpdates).toHaveBeenCalledTimes(1);
+    expect(realtimeMocks.getDelayForTripAtStopFromUpdates).toHaveBeenCalledTimes(2);
+    expect(realtimeMocks.getDelayForTripFromUpdates).toHaveBeenCalledTimes(1);
   });
 });
