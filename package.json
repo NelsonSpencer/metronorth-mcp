@@ -23,7 +23,7 @@
   ],
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "node scripts/clean-build.mjs && tsc",
     "start": "node build/index.js",
     "smoke": "npm run build && node scripts/smoke.mjs",
     "smoke:mcp": "npm run build && node scripts/smoke-mcp.mjs",
