@@ -7,6 +7,12 @@
   "bin": {
     "metronorth-mcp": "./build/index.js"
   },
+  "files": [
+    "build",
+    ".env.example",
+    "LICENSE",
+    "README.md"
+  ],
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
@@ -20,7 +26,7 @@
     "typecheck": "tsc --noEmit",
     "db:migrate": "tsx src/infrastructure/migrate.ts",
     "gtfs:update": "tsx src/infrastructure/update-gtfs.ts",
-    "prepare": "husky"
+    "prepare": "npm run build && node scripts/prepare.mjs"
   },
   "keywords": [
     "mcp",

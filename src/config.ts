@@ -1,11 +1,22 @@
 import { z } from 'zod';
+import path from 'node:path';
+import { homedir } from 'node:os';
+
+function getDefaultDbPath(): string {
+  const cacheRoot = process.env.XDG_CACHE_HOME || path.join(homedir(), '.cache');
+  return path.join(cacheRoot, 'metronorth-mcp', 'metronorth.db');
+}
+
+function emptyStringToUndefined(value: unknown): unknown {
+  return value === '' ? undefined : value;
+}
 
 // Environment variable validation schema
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
-  REDIS_URL: z.string().url().optional(),
-  DB_PATH: z.string().default('./db/metronorth.db'),
+  REDIS_URL: z.preprocess(emptyStringToUndefined, z.string().url().optional()),
+  DB_PATH: z.preprocess(emptyStringToUndefined, z.string().default(getDefaultDbPath())),
   GTFS_UPDATE_INTERVAL_HOURS: z.coerce.number().default(24),
   CACHE_TTL_SECONDS: z.coerce.number().default(300),
 });

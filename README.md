@@ -1,25 +1,22 @@
 # Metro-North MCP Server
 
-Metro-North MCP is a Model Context Protocol server that lets AI assistants answer practical Metro-North questions using public MTA schedule and real-time feeds.
+MCP server for Metro-North schedules, stations, service alerts, and real-time departures.
 
-It exposes tools for station search, upcoming departures, trip details, route schedules, service alerts, and local data freshness. The server runs over MCP stdio, caches schedule data in SQLite, and can optionally use Redis for shared caching.
+Uses public MTA GTFS and GTFS-Realtime feeds. Runs locally over MCP stdio.
 
-## Why I Built This
+## Features
 
-I built this as a focused integration project: take a real public data source, turn it into a reliable local service, and expose it through an AI-native interface. It demonstrates the kind of work I enjoy most: connecting messy real-world data, workflow context, and practical automation into something useful.
-
-## What This Demonstrates
-
-- MCP server design with TypeScript and stdio transport
-- Public GTFS and GTFS-Realtime feed integration
-- Local schedule caching with SQLite
-- Optional Redis-backed caching
-- Input validation for AI-callable tools
-- Tests, typechecking, linting, Docker support, and CI
+- Search Metro-North stations by name
+- Get upcoming departures for a station
+- View trip details and route schedules
+- Check current service alerts
+- Read station metadata and served routes
+- Check local data freshness and feed availability
+- Expose MCP tools, resources, and prompts
 
 ## Data Sources
 
-This project uses public MTA feeds and does not require an MTA API key.
+Uses public MTA feeds. No MTA API key required.
 
 | Data | Source | Local handling |
 | --- | --- | --- |
@@ -29,11 +26,21 @@ This project uses public MTA feeds and does not require an MTA API key.
 
 ## Available Tools
 
-Tool results include readable text content and MCP `structuredContent` so assistants can show a useful answer while clients can still consume the response as data. Tool-domain failures, such as invalid arguments or unknown stations, return MCP tool errors with structured error details.
+Tool results include readable text and MCP `structuredContent`. Invalid inputs and unknown stations return structured errors.
 
-### `search_stations`
+| Tool | Use |
+| --- | --- |
+| `search_stations` | Search stations by name |
+| `get_departures` | Get upcoming departures from a station |
+| `get_trip_details` | Get stop-level details for a trip |
+| `get_route_schedule` | Get a route schedule by date and direction |
+| `get_service_alerts` | Get current service alerts |
+| `get_station_info` | Get station metadata and served routes |
+| `get_system_status` | Check feed availability and local data freshness |
 
-Search for Metro-North stations by name.
+### Examples
+
+Search stations:
 
 ```json
 {
@@ -42,25 +49,7 @@ Search for Metro-North stations by name.
 }
 ```
 
-Example result shape:
-
-```json
-{
-  "query": "White Plains",
-  "results": [
-    {
-      "stop_id": "place_WP",
-      "name": "White Plains",
-      "zone": "4"
-    }
-  ],
-  "total": 1
-}
-```
-
-### `get_departures`
-
-Get upcoming departures from a station.
+Get departures:
 
 ```json
 {
@@ -71,30 +60,7 @@ Get upcoming departures from a station.
 }
 ```
 
-Example result shape:
-
-```json
-{
-  "station": "Grand Central",
-  "departures": [
-    {
-      "route": "Hudson",
-      "destination": "Poughkeepsie",
-      "scheduled": "17:42",
-      "actual": "17:47",
-      "delay": "5 min late",
-      "status": "delayed",
-      "upcoming_stops": ["Harlem-125th Street", "Yankees-E 153rd Street"],
-      "trip_id": "example-trip-id"
-    }
-  ],
-  "realtime_available": true
-}
-```
-
-### `get_trip_details`
-
-Get detailed stop information for a specific trip.
+Get trip details:
 
 ```json
 {
@@ -103,9 +69,7 @@ Get detailed stop information for a specific trip.
 }
 ```
 
-### `get_route_schedule`
-
-Get a route schedule for a date and direction.
+Get a route schedule:
 
 ```json
 {
@@ -115,9 +79,7 @@ Get a route schedule for a date and direction.
 }
 ```
 
-### `get_service_alerts`
-
-Get current service alerts, optionally filtered by route or station.
+Get service alerts:
 
 ```json
 {
@@ -125,9 +87,7 @@ Get current service alerts, optionally filtered by route or station.
 }
 ```
 
-### `get_station_info`
-
-Get station metadata and served routes.
+Get station info:
 
 ```json
 {
@@ -135,31 +95,27 @@ Get station metadata and served routes.
 }
 ```
 
-### `get_system_status`
-
-Check server status, local GTFS freshness, cached stop/trip counts, and real-time availability.
+Check system status:
 
 ```json
 {}
 ```
 
-## MCP Resources And Prompts
+## MCP Resources and Prompts
 
-The server also exposes a small read-only MCP resource layer for stable reference data:
+Read-only resources:
 
 - `metronorth://system/status`
 - `metronorth://routes`
 - `metronorth://stations`
 - `metronorth://station/{station_name}`
 
-Resources are for context that a client can read directly. Actions that need arguments, matching, or real-time lookup stay as tools.
-
-Prompt templates provide reusable assistant workflows:
+Prompt templates:
 
 - `plan-metro-north-trip`
 - `summarize-service-status`
 
-They guide an assistant to combine station search, departures, service alerts, and data freshness checks without hiding the underlying tools.
+Tools handle dynamic lookups. Resources expose reference data. Prompts provide reusable workflows.
 
 ## Quick Start
 
@@ -168,7 +124,7 @@ They guide an assistant to combine station search, departures, service alerts, a
 - Node.js 20+
 - npm
 
-### Install And Build
+### Install and Build
 
 ```bash
 git clone https://github.com/NelsonSpencer/metronorth-mcp.git
@@ -184,23 +140,102 @@ npm run build
 npm start
 ```
 
-On first startup, the server checks whether local GTFS schedule data is available. If not, it downloads the public Metro-North GTFS ZIP and imports it into SQLite.
+First run downloads the public Metro-North GTFS ZIP and imports it into SQLite.
 
 ## MCP Client Setup
 
-### Claude Desktop
+Run from GitHub:
 
-After building the project, add this to your Claude Desktop configuration:
+```bash
+npx -y --package github:NelsonSpencer/metronorth-mcp metronorth-mcp
+```
+
+Use `metronorth` as the server name.
+
+### Cursor
+
+[Install in Cursor](cursor://anysphere.cursor-deeplink/mcp/install?name=metronorth&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIi0tcGFja2FnZSIsImdpdGh1YjpOZWxzb25TcGVuY2VyL21ldHJvbm9ydGgtbWNwIiwibWV0cm9ub3J0aC1tY3AiXSwiZW52Ijp7Ik5PREVfRU5WIjoicHJvZHVjdGlvbiIsIkxPR19MRVZFTCI6Indhcm4ifX0%3D)
+
+Restart Cursor after installing.
+
+### Codex
+
+```bash
+codex mcp add metronorth -- npx -y --package github:NelsonSpencer/metronorth-mcp metronorth-mcp
+codex mcp list
+```
+
+Restart Codex after installing.
+
+### Claude Code
+
+```bash
+claude mcp add metronorth -- npx -y --package github:NelsonSpencer/metronorth-mcp metronorth-mcp
+claude mcp list
+```
+
+Run `/mcp` in Claude Code to confirm the server is connected.
+
+### VS Code
+
+```bash
+code --add-mcp '{"name":"metronorth","command":"npx","args":["-y","--package","github:NelsonSpencer/metronorth-mcp","metronorth-mcp"]}'
+```
+
+Open Copilot Chat in Agent mode and enable the server from the tools picker.
+
+### OpenClaw
+
+```bash
+openclaw mcp set metronorth '{"command":"npx","args":["-y","--package","github:NelsonSpencer/metronorth-mcp","metronorth-mcp"]}'
+openclaw mcp list
+```
+
+Restart OpenClaw after installing.
+
+### Hermes
+
+```bash
+hermes mcp add metronorth --command npx --args -y --package github:NelsonSpencer/metronorth-mcp metronorth-mcp
+hermes mcp test metronorth
+```
+
+Restart Hermes, or reload MCP servers with `/reload-mcp`.
+
+### Claude Desktop, Cline, Roo Code, Windsurf, And Other MCP Clients
+
+Use this server entry:
+
+```json
+{
+  "command": "npx",
+  "args": ["-y", "--package", "github:NelsonSpencer/metronorth-mcp", "metronorth-mcp"]
+}
+```
+
+If the client expects a full MCP config file:
 
 ```json
 {
   "mcpServers": {
     "metronorth": {
-      "command": "node",
-      "args": ["/absolute/path/to/metronorth-mcp/build/index.js"]
+      "command": "npx",
+      "args": ["-y", "--package", "github:NelsonSpencer/metronorth-mcp", "metronorth-mcp"]
     }
   }
 }
+```
+
+Restart or reload MCP servers after editing config.
+
+### Agent Install Prompt
+
+For agent-assisted setup:
+
+```text
+Install the Metro-North MCP server in this client as "metronorth".
+Use command "npx" with args ["-y", "--package", "github:NelsonSpencer/metronorth-mcp", "metronorth-mcp"].
+After installing, reload MCP servers and test it by calling search_stations with query "Grand Central".
 ```
 
 ### Docker
@@ -209,7 +244,7 @@ After building the project, add this to your Claude Desktop configuration:
 docker build -t metronorth-mcp .
 ```
 
-Then configure an MCP client to run:
+MCP client config:
 
 ```json
 {
@@ -224,18 +259,20 @@ Then configure an MCP client to run:
 
 ## Configuration
 
-Create a `.env` file from `.env.example`.
+Create `.env` from `.env.example`.
 
 ```env
 NODE_ENV=development
 LOG_LEVEL=info
 REDIS_URL=
-DB_PATH=./db/metronorth.db
+DB_PATH=
 GTFS_UPDATE_INTERVAL_HOURS=24
 CACHE_TTL_SECONDS=300
 ```
 
 Redis is optional. If `REDIS_URL` is empty, the server falls back to local in-memory caching.
+
+If `DB_PATH` is empty, schedule data is stored in `~/.cache/metronorth-mcp/metronorth.db`.
 
 ## Development
 
@@ -246,14 +283,14 @@ npm run lint
 npm run build
 ```
 
-After loading GTFS data with `npm run gtfs:update`, run a real-data smoke check:
+Run smoke checks:
 
 ```bash
 npm run smoke
 npm run smoke:mcp
 ```
 
-Useful scripts:
+Other scripts:
 
 ```bash
 npm run dev
@@ -263,7 +300,7 @@ npm run db:migrate
 
 ## Docker Compose
 
-Docker Compose starts the MCP server with Redis and persistent volumes for local GTFS data and SQLite.
+Docker Compose starts the MCP server with Redis and persistent storage.
 
 ```bash
 docker-compose up -d
@@ -283,19 +320,19 @@ MCP client
   -> optional Redis cache
 ```
 
-## MCP Design Notes
+## Design Notes
 
-This project treats MCP tools, resources, and prompts as separate surfaces:
+MCP surface:
 
 - Tools handle dynamic questions like departures, alerts, route schedules, and station matching.
-- Resources expose read-only reference/context data like routes, stations, and system status.
-- Prompts provide repeatable assistant workflows for trip planning and service-status summaries.
+- Resources expose read-only reference data like routes, stations, and system status.
+- Prompts provide repeatable workflows for trip planning and service-status summaries.
 
 Static schedules are downloaded from public MTA GTFS feeds and stored locally in SQLite. Real-time data is fetched from public GTFS-Realtime feeds and should be treated as best-effort context rather than a guarantee.
 
 ## Project Status
 
-This is a proof-of-work project, not an official MTA product. It is intended to show a practical AI-native integration pattern using public transit data and MCP.
+Unofficial project using public MTA feeds. Not affiliated with or endorsed by the MTA.
 
 ## License
 

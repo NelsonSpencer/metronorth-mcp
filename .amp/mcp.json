@@ -1,7 +1,0 @@
-{
-  "metronorth": {
-    "command": "/Users/nelsonspencer/.nvm/versions/node/v22.16.0/bin/npx",
-    "args": ["tsx", "src/index.ts"],
-    "cwd": "/Users/nelsonspencer/Documents/GitHub/Projects/B - Personal/B - Simmering/metronorth-mcp"
-  }
-}
