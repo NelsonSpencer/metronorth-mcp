@@ -3,7 +3,13 @@ import { getRealtimeClient } from './realtime-client.js';
 import { getStationService } from './station-service.js';
 import { createModuleLogger } from '../logger.js';
 import { ROUTE_NAMES } from '../config.js';
-import type { DepartureInfo, FirstLastTrains, StationPairTrip, TripDetails, TripStop } from '../domain/gtfs.js';
+import type {
+  DepartureInfo,
+  FirstLastTrains,
+  StationPairTrip,
+  TripDetails,
+  TripStop,
+} from '../domain/gtfs.js';
 import {
   addMinutesToGtfsTime,
   compactServiceDate,
@@ -59,6 +65,8 @@ type StationPairScheduleOptions = {
   limit?: number;
   includeRealtime?: boolean;
 };
+
+type StationPairOrder = 'ASC' | 'DESC';
 
 function normalizeGtfsTimeInput(value: string): string {
   const parts = value.split(':');
@@ -181,23 +189,25 @@ export class ScheduleService {
     const params = [station.stop_id, ...serviceIds, now.queryTime, limit * 2];
     const rows = sqlite.prepare(query).all(...params) as ScheduleRow[];
 
-    // Get realtime delays if available
     const realtimeClient = getRealtimeClient();
+    const realtimeUpdates =
+      includeRealtime && realtimeClient.isAvailable() ? await realtimeClient.getTripUpdates() : null;
     const departures: DepartureInfo[] = [];
 
     for (const row of rows) {
       let delayMinutes: number | null = null;
       let status: DepartureInfo['status'] = 'unknown';
 
-      if (includeRealtime && realtimeClient.isAvailable()) {
+      if (realtimeUpdates) {
         // Use trip_short_name (train number) to match realtime data
-        const realtimeInfo = await realtimeClient.getRealtimeInfoForTripAtStop(
-          row.trip_id, 
+        const realtimeInfo = realtimeClient.getRealtimeInfoForTripAtStopFromUpdates(
+          realtimeUpdates,
+          row.trip_id,
           station.stop_id,
           row.departure_time,
           row.trip_short_name || undefined
         );
-        
+
         if (realtimeInfo.delaySeconds !== null) {
           delayMinutes = Math.round(realtimeInfo.delaySeconds / 60);
         }
@@ -313,14 +323,20 @@ export class ScheduleService {
 
     // Get realtime data if available
     const realtimeClient = getRealtimeClient();
+    const realtimeUpdates =
+      includeRealtime && realtimeClient.isAvailable() ? await realtimeClient.getTripUpdates() : null;
     let realtimeStatus = null;
 
     const stops: TripStop[] = [];
     for (const row of stopRows) {
       let delayMinutes: number | null = null;
 
-      if (includeRealtime && realtimeClient.isAvailable()) {
-        delayMinutes = await realtimeClient.getDelayForTripAtStop(tripId, row.stop_id);
+      if (realtimeUpdates) {
+        delayMinutes = realtimeClient.getDelayForTripAtStopFromUpdates(
+          realtimeUpdates,
+          tripId,
+          row.stop_id
+        );
         if (delayMinutes !== null) {
           delayMinutes = Math.round(delayMinutes / 60);
         }
@@ -337,8 +353,8 @@ export class ScheduleService {
     }
 
     // Get overall trip delay
-    if (includeRealtime && realtimeClient.isAvailable()) {
-      const tripDelay = await realtimeClient.getDelayForTrip(tripId);
+    if (realtimeUpdates) {
+      const tripDelay = realtimeClient.getDelayForTripFromUpdates(realtimeUpdates, tripId);
       if (tripDelay !== null) {
         realtimeStatus = {
           delay_minutes: Math.round(tripDelay / 60),
@@ -446,7 +462,6 @@ export class ScheduleService {
       return [];
     }
 
-    const sqlite = getSqlite();
     const serviceDate = options.date || getMetroNorthServiceContext().serviceDate;
     const serviceIds = this.getActiveServiceIds(serviceDate);
     if (serviceIds.length === 0) return [];
@@ -455,6 +470,26 @@ export class ScheduleService {
       options.departAfter || getDefaultDepartAfter(options.date)
     );
     const limit = options.limit || 5;
+
+    const rows = this.getStationPairRows(originStation.stop_id, destinationStation.stop_id, serviceIds, {
+      departAfter,
+      limit,
+      order: 'ASC',
+    });
+
+    return this.mapStationPairRows(rows, options.includeRealtime ?? true);
+  }
+
+  private getStationPairRows(
+    originStopId: string,
+    destinationStopId: string,
+    serviceIds: string[],
+    options: { departAfter?: string; limit?: number; order?: StationPairOrder } = {}
+  ): StationPairRow[] {
+    const sqlite = getSqlite();
+    const order = options.order || 'ASC';
+    const departAfterFilter = options.departAfter ? 'AND origin_st.departure_time >= ?' : '';
+    const limitClause = options.limit ? 'LIMIT ?' : '';
 
     const query = `
       SELECT
@@ -483,16 +518,44 @@ export class ScheduleService {
         AND destination_st.stop_id = ?
         AND destination_st.stop_sequence > origin_st.stop_sequence
         AND t.service_id IN (${serviceIds.map(() => '?').join(',')})
-        AND origin_st.departure_time >= ?
-      ORDER BY origin_st.departure_time
-      LIMIT ?
+        ${departAfterFilter}
+      ORDER BY origin_st.departure_time ${order}
+      ${limitClause}
     `;
 
-    const rows = sqlite
-      .prepare(query)
-      .all(originStation.stop_id, destinationStation.stop_id, ...serviceIds, departAfter, limit) as StationPairRow[];
+    const params: Array<string | number> = [originStopId, destinationStopId, ...serviceIds];
+    if (options.departAfter) {
+      params.push(options.departAfter);
+    }
+    if (options.limit) {
+      params.push(options.limit);
+    }
 
-    return this.mapStationPairRows(rows, options.includeRealtime ?? true);
+    return sqlite.prepare(query).all(...params) as StationPairRow[];
+  }
+
+  private countStationPairTrips(
+    originStopId: string,
+    destinationStopId: string,
+    serviceIds: string[]
+  ): number {
+    const sqlite = getSqlite();
+    const row = sqlite
+      .prepare(
+        `SELECT COUNT(*) AS total_direct_trips
+         FROM trips t
+         JOIN stop_times origin_st ON origin_st.trip_id = t.trip_id
+         JOIN stop_times destination_st ON destination_st.trip_id = t.trip_id
+         WHERE origin_st.stop_id = ?
+           AND destination_st.stop_id = ?
+           AND destination_st.stop_sequence > origin_st.stop_sequence
+           AND t.service_id IN (${serviceIds.map(() => '?').join(',')})`
+      )
+      .get(originStopId, destinationStopId, ...serviceIds) as
+      | { total_direct_trips: number }
+      | undefined;
+
+    return row?.total_direct_trips || 0;
   }
 
   async getFirstLastTrains(
@@ -502,20 +565,87 @@ export class ScheduleService {
     includeRealtime: boolean = true
   ): Promise<FirstLastTrains> {
     const serviceDate = date || getMetroNorthServiceContext().serviceDate;
-    const trips = await this.getStationPairSchedule(originStationName, destinationStationName, {
-      date: serviceDate,
-      departAfter: '00:00:00',
-      limit: 1000,
-      includeRealtime,
+    const stationService = getStationService();
+    const [originStation, destinationStation] = await Promise.all([
+      stationService.findStationByName(originStationName),
+      stationService.findStationByName(destinationStationName),
+    ]);
+
+    if (!originStation || !destinationStation) {
+      logger.warn({ originStationName, destinationStationName }, 'Station pair not found');
+      return {
+        service_date: serviceDate,
+        origin_station: originStationName,
+        destination_station: destinationStationName,
+        first_train: null,
+        last_train: null,
+        total_direct_trips: 0,
+      };
+    }
+
+    const serviceIds = this.getActiveServiceIds(serviceDate);
+    if (serviceIds.length === 0) {
+      return {
+        service_date: serviceDate,
+        origin_station: originStationName,
+        destination_station: destinationStationName,
+        first_train: null,
+        last_train: null,
+        total_direct_trips: 0,
+      };
+    }
+
+    const totalDirectTrips = this.countStationPairTrips(
+      originStation.stop_id,
+      destinationStation.stop_id,
+      serviceIds
+    );
+
+    if (totalDirectTrips === 0) {
+      return {
+        service_date: serviceDate,
+        origin_station: originStationName,
+        destination_station: destinationStationName,
+        first_train: null,
+        last_train: null,
+        total_direct_trips: 0,
+      };
+    }
+
+    const firstRow = this.getStationPairRows(
+      originStation.stop_id,
+      destinationStation.stop_id,
+      serviceIds,
+      {
+        limit: 1,
+        order: 'ASC',
+      }
+    )[0];
+    const lastRow = this.getStationPairRows(
+      originStation.stop_id,
+      destinationStation.stop_id,
+      serviceIds,
+      {
+        limit: 1,
+        order: 'DESC',
+      }
+    )[0];
+
+    const rowsToMap = [firstRow, lastRow].filter((row, index): row is StationPairRow => {
+      if (!row) return false;
+      return index === 0 || row.trip_id !== firstRow?.trip_id;
     });
+    const trips = await this.mapStationPairRows(rowsToMap, includeRealtime);
+    const firstTrain = trips[0] || null;
+    const lastTrain = lastRow?.trip_id === firstRow?.trip_id ? firstTrain : trips[1] || null;
 
     return {
       service_date: serviceDate,
       origin_station: originStationName,
       destination_station: destinationStationName,
-      first_train: trips[0] || null,
-      last_train: trips[trips.length - 1] || null,
-      total_direct_trips: trips.length,
+      first_train: firstTrain,
+      last_train: lastTrain,
+      total_direct_trips: totalDirectTrips,
     };
   }
 
@@ -524,6 +654,8 @@ export class ScheduleService {
     includeRealtime: boolean
   ): Promise<StationPairTrip[]> {
     const realtimeClient = getRealtimeClient();
+    const realtimeUpdates =
+      includeRealtime && realtimeClient.isAvailable() ? await realtimeClient.getTripUpdates() : null;
     const trips: StationPairTrip[] = [];
 
     for (const row of rows) {
@@ -531,14 +663,16 @@ export class ScheduleService {
       let destinationDelayMinutes: number | null = null;
       let status: StationPairTrip['status'] = 'unknown';
 
-      if (includeRealtime && realtimeClient.isAvailable()) {
-        const originRealtime = await realtimeClient.getRealtimeInfoForTripAtStop(
+      if (realtimeUpdates) {
+        const originRealtime = realtimeClient.getRealtimeInfoForTripAtStopFromUpdates(
+          realtimeUpdates,
           row.trip_id,
           row.origin_stop_id,
           row.origin_departure_time,
           row.trip_short_name || undefined
         );
-        const destinationRealtime = await realtimeClient.getRealtimeInfoForTripAtStop(
+        const destinationRealtime = realtimeClient.getRealtimeInfoForTripAtStopFromUpdates(
+          realtimeUpdates,
           row.trip_id,
           row.destination_stop_id,
           row.destination_arrival_time,

@@ -11,7 +11,7 @@ import {
   ErrorCode,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
-import { toolDefinitions, handleToolCall } from './tools/index.js';
+import { toolDefinitions, handleToolCall, createRequestContext } from './tools/index.js';
 import { promptDefinitions, handleGetPrompt } from './prompts.js';
 import {
   handleReadResource,
@@ -22,6 +22,7 @@ import { getDatabase, closeDatabase } from './infrastructure/database.js';
 import { getGTFSLoader } from './infrastructure/gtfs-loader.js';
 import { shutdownCache } from './infrastructure/cache.js';
 import { createModuleLogger } from './logger.js';
+import { getServerInfo } from './package-metadata.js';
 
 const logger = createModuleLogger('server');
 
@@ -31,10 +32,7 @@ export class MetroNorthMCPServer {
 
   constructor() {
     this.server = new Server(
-      {
-        name: 'metronorth-mcp',
-        version: '2.0.0',
-      },
+      getServerInfo(),
       {
         capabilities: {
           tools: {},
@@ -85,17 +83,22 @@ export class MetroNorthMCPServer {
     // Handle tool calls
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
+      const context = createRequestContext();
 
       if (!toolDefinitions.some((t) => t.name === name)) {
+        logger.warn({ tool: name, request_id: context.requestId }, 'Unknown tool requested');
         throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
       }
 
       try {
-        const result = await handleToolCall(name, args || {});
+        const result = await handleToolCall(name, args || {}, context);
         return result;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        logger.error({ tool: name, error: message }, 'Tool execution error');
+        logger.error(
+          { tool: name, request_id: context.requestId, error: message },
+          'Tool execution error'
+        );
 
         throw new McpError(ErrorCode.InternalError, `Tool execution failed: ${message}`);
       }
@@ -120,8 +123,12 @@ export class MetroNorthMCPServer {
       process.exit(0);
     };
 
-    process.on('SIGINT', () => shutdown('SIGINT'));
-    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => {
+      void shutdown('SIGINT');
+    });
+    process.on('SIGTERM', () => {
+      void shutdown('SIGTERM');
+    });
   }
 
   async initialize(): Promise<void> {

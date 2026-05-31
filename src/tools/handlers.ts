@@ -1,0 +1,393 @@
+import {
+  GetDeparturesSchema,
+  GetRouteScheduleSchema,
+  GetServiceAlertsSchema,
+  GetTripDetailsSchema,
+  GetStationInfoSchema,
+  GetStationPairScheduleSchema,
+  GetFirstLastTrainsSchema,
+  PlanMetroNorthTripSchema,
+  SearchStationsSchema,
+  type StationPairTrip,
+} from '../domain/gtfs.js';
+import { getMetroNorthServiceContext } from '../domain/transit-time.js';
+import { ROUTE_IDS_BY_NAME } from '../config.js';
+import { getSystemStatus } from '../system-status.js';
+import type { ToolContext } from './context.js';
+import { ToolDomainError } from './errors.js';
+import { parseArgs } from './validation.js';
+
+export type ToolHandler = (
+  args: Record<string, unknown>,
+  context: ToolContext
+) => Promise<unknown>;
+
+export const toolHandlers: Record<string, ToolHandler> = {
+  get_departures: handleGetDepartures,
+  get_trip_details: handleGetTripDetails,
+  get_route_schedule: handleGetRouteSchedule,
+  get_service_alerts: handleGetServiceAlerts,
+  search_stations: handleSearchStations,
+  get_station_info: handleGetStationInfo,
+  get_system_status: handleGetSystemStatus,
+  get_station_pair_schedule: handleGetStationPairSchedule,
+  get_first_last_trains: handleGetFirstLastTrains,
+  plan_metro_north_trip: handlePlanMetroNorthTrip,
+} satisfies Record<string, ToolHandler>;
+
+async function handleGetDepartures(args: Record<string, unknown>, context: ToolContext) {
+  const parsed = parseArgs(GetDeparturesSchema, args);
+  const { station_name, direction, limit, include_realtime } = parsed;
+  const departures = await context.scheduleService.getDepartures(
+    station_name,
+    direction,
+    limit,
+    include_realtime
+  );
+
+  if (departures.length === 0) {
+    throw new ToolDomainError('not_found', `No upcoming departures found from "${station_name}"`, {
+      suggestions: [
+        'Check the station name spelling',
+        'Try a partial name like "Grand" for Grand Central',
+        'Use search_stations to find the correct station name',
+      ],
+    });
+  }
+
+  return {
+    station: station_name,
+    departures: departures.map((d) => ({
+      route: d.route_name,
+      destination: d.destination,
+      scheduled: d.scheduled_departure,
+      actual: d.actual_departure || d.scheduled_departure,
+      delay: d.delay_minutes ? `${d.delay_minutes} min late` : null,
+      status: d.status,
+      upcoming_stops: d.stops.slice(0, 5),
+      trip_id: d.trip_id,
+    })),
+    realtime_available: departures.some((d) => d.delay_minutes !== null),
+  };
+}
+
+async function handleGetTripDetails(args: Record<string, unknown>, context: ToolContext) {
+  const { trip_id, include_realtime } = parseArgs(GetTripDetailsSchema, args);
+  const details = await context.scheduleService.getTripDetails(trip_id, include_realtime);
+
+  if (!details) {
+    throw new ToolDomainError('not_found', `Trip "${trip_id}" not found`, {
+      suggestion: 'Use get_departures first to find valid trip IDs',
+    });
+  }
+
+  return {
+    trip_id: details.trip_id,
+    route: details.route_name,
+    direction: details.direction,
+    service_days: details.service_days,
+    stops: details.stops.map((s) => ({
+      station: s.stop_name,
+      arrival: s.arrival_time,
+      departure: s.departure_time,
+      delay: s.delay_minutes ? `${s.delay_minutes} min` : null,
+    })),
+    realtime_status: details.realtime_status,
+  };
+}
+
+async function handleGetRouteSchedule(args: Record<string, unknown>, context: ToolContext) {
+  const { route_name, date, direction } = parseArgs(GetRouteScheduleSchema, args);
+  const schedule = await context.scheduleService.getRouteSchedule(route_name, date, direction);
+
+  if (schedule.length === 0) {
+    throw new ToolDomainError('not_found', `No schedule found for route "${route_name}"`, {
+      available_routes: ['Hudson', 'Harlem', 'New Haven', 'New Canaan', 'Danbury', 'Waterbury'],
+    });
+  }
+
+  return {
+    route: route_name,
+    date: date || getMetroNorthServiceContext().serviceDate,
+    direction,
+    trips: schedule.map((t) => ({
+      trip_id: t.trip_id,
+      destination: t.destination,
+      departure: t.scheduled_departure,
+    })),
+    total_trips: schedule.length,
+  };
+}
+
+async function handleGetServiceAlerts(args: Record<string, unknown>, context: ToolContext) {
+  const { route_name, station_name } = parseArgs(GetServiceAlertsSchema, args);
+  const alerts = await context.realtimeClient.getServiceAlerts();
+
+  let filtered = alerts;
+  if (route_name) {
+    const routeIds = ROUTE_IDS_BY_NAME[route_name.toLowerCase()] || [];
+    filtered = filtered.filter((a) =>
+      a.informed_entities.some((e) => routeIds.includes(e.route_id || ''))
+    );
+  }
+
+  if (station_name) {
+    const station = await context.stationService.findStationByName(station_name);
+    if (!station) {
+      throw new ToolDomainError('not_found', `Station "${station_name}" not found`, {
+        suggestion: 'Use search_stations to find the correct station name',
+      });
+    }
+
+    filtered = filtered.filter((a) =>
+      a.informed_entities.some((e) => e.stop_id === station.stop_id)
+    );
+  }
+
+  return {
+    alerts: filtered.map((a) => ({
+      id: a.alert_id,
+      header: a.header_text,
+      description: a.description_text,
+      cause: a.cause,
+      effect: a.effect,
+      affected_routes: a.informed_entities
+        .filter((e) => e.route_id)
+        .map((e) => e.route_id),
+    })),
+    total: filtered.length,
+    last_updated: new Date().toISOString(),
+  };
+}
+
+async function handleSearchStations(args: Record<string, unknown>, context: ToolContext) {
+  const { query, limit } = parseArgs(SearchStationsSchema, args);
+  const stations = await context.stationService.searchStations(query, limit);
+
+  return {
+    query,
+    results: stations.map((s) => ({
+      stop_id: s.stop_id,
+      name: s.stop_name,
+      zone: s.zone_id,
+    })),
+    total: stations.length,
+  };
+}
+
+async function handleGetStationInfo(args: Record<string, unknown>, context: ToolContext) {
+  const { station_name } = parseArgs(GetStationInfoSchema, args);
+  const info = await context.stationService.getStationInfo(station_name);
+
+  if (!info) {
+    throw new ToolDomainError('not_found', `Station "${station_name}" not found`, {
+      suggestion: 'Use search_stations to find the correct station name',
+    });
+  }
+
+  return {
+    station: {
+      id: info.stop_id,
+      name: info.name,
+      location: {
+        latitude: info.latitude,
+        longitude: info.longitude,
+      },
+      zone: info.zone_id,
+      routes: info.routes,
+      wheelchair_accessible: info.wheelchair_accessible,
+    },
+  };
+}
+
+async function handleGetSystemStatus(_args: Record<string, unknown>, context: ToolContext) {
+  return getSystemStatus({
+    getMetadata: context.getMetadata,
+    gtfsLoader: context.gtfsLoader,
+    realtimeClient: context.realtimeClient,
+  });
+}
+
+function formatStationPairTrip(trip: StationPairTrip) {
+  return {
+    trip_id: trip.trip_id,
+    route: trip.route_name,
+    destination: trip.destination,
+    direction: trip.direction,
+    origin: trip.origin_station,
+    destination_station: trip.destination_station,
+    origin_departure: {
+      scheduled: trip.scheduled_origin_departure,
+      actual: trip.actual_origin_departure || trip.scheduled_origin_departure,
+      delay_minutes: trip.origin_delay_minutes,
+    },
+    destination_arrival: {
+      scheduled: trip.scheduled_destination_arrival,
+      actual: trip.actual_destination_arrival || trip.scheduled_destination_arrival,
+      delay_minutes: trip.destination_delay_minutes,
+    },
+    duration_minutes: trip.duration_minutes,
+    status: trip.status,
+  };
+}
+
+async function handleGetStationPairSchedule(args: Record<string, unknown>, context: ToolContext) {
+  const {
+    origin_station,
+    destination_station,
+    date,
+    depart_after,
+    limit,
+    include_realtime,
+  } = parseArgs(GetStationPairScheduleSchema, args);
+  const serviceDate = date || getMetroNorthServiceContext().serviceDate;
+  const trips = await context.scheduleService.getStationPairSchedule(
+    origin_station,
+    destination_station,
+    {
+      date: serviceDate,
+      departAfter: depart_after,
+      limit,
+      includeRealtime: include_realtime,
+    }
+  );
+
+  if (trips.length === 0) {
+    throw new ToolDomainError(
+      'not_found',
+      `No direct trains found from "${origin_station}" to "${destination_station}"`,
+      {
+        suggestion:
+          'Use search_stations to verify station names. Transfer planning is not included in this tool.',
+      }
+    );
+  }
+
+  return {
+    origin: origin_station,
+    destination: destination_station,
+    service_date: serviceDate,
+    depart_after: depart_after || null,
+    trips: trips.map(formatStationPairTrip),
+    total_direct_trips: trips.length,
+    realtime_available: trips.some(
+      (trip) => trip.origin_delay_minutes !== null || trip.destination_delay_minutes !== null
+    ),
+  };
+}
+
+async function handleGetFirstLastTrains(args: Record<string, unknown>, context: ToolContext) {
+  const { origin_station, destination_station, date, include_realtime } = parseArgs(
+    GetFirstLastTrainsSchema,
+    args
+  );
+  const serviceDate = date || getMetroNorthServiceContext().serviceDate;
+  const result = await context.scheduleService.getFirstLastTrains(
+    origin_station,
+    destination_station,
+    serviceDate,
+    include_realtime
+  );
+
+  return {
+    ...result,
+    first_train: result.first_train ? formatStationPairTrip(result.first_train) : null,
+    last_train: result.last_train ? formatStationPairTrip(result.last_train) : null,
+    no_service:
+      result.total_direct_trips === 0
+        ? `No direct trains found from "${origin_station}" to "${destination_station}" on ${serviceDate}`
+        : null,
+  };
+}
+
+async function handlePlanMetroNorthTrip(args: Record<string, unknown>, context: ToolContext) {
+  const {
+    origin_station,
+    destination_station,
+    date,
+    depart_after,
+    limit,
+    include_realtime,
+    include_alerts,
+  } = parseArgs(PlanMetroNorthTripSchema, args);
+  const serviceDate = date || getMetroNorthServiceContext().serviceDate;
+  const options = await context.scheduleService.getStationPairSchedule(
+    origin_station,
+    destination_station,
+    {
+      date: serviceDate,
+      departAfter: depart_after,
+      limit,
+      includeRealtime: include_realtime,
+    }
+  );
+
+  if (options.length === 0) {
+    throw new ToolDomainError(
+      'not_found',
+      `No direct trip options found from "${origin_station}" to "${destination_station}"`,
+      {
+        suggestion:
+          'Use search_stations to verify station names. Transfer planning is not included in this tool.',
+      }
+    );
+  }
+
+  const status = await handleGetSystemStatus({}, context);
+  const alerts = include_alerts
+    ? await getRelevantTripAlerts(options, origin_station, destination_station, context)
+    : [];
+
+  return {
+    origin: origin_station,
+    destination: destination_station,
+    service_date: serviceDate,
+    depart_after: depart_after || null,
+    recommended_option: formatStationPairTrip(options[0]),
+    alternate_options: options.slice(1).map(formatStationPairTrip),
+    alerts,
+    data_freshness: status.gtfs_data,
+    realtime: {
+      requested: include_realtime,
+      available: status.realtime.available,
+      caveat: 'Realtime departures and alerts use public MTA feeds and are best-effort.',
+    },
+    next_step:
+      'Use get_trip_details with the selected trip_id for the full stop list, or get_service_alerts for broader service context.',
+  };
+}
+
+async function getRelevantTripAlerts(
+  options: StationPairTrip[],
+  originStationName: string,
+  destinationStationName: string,
+  context: ToolContext
+) {
+  const [originStation, destinationStation, alerts] = await Promise.all([
+    context.stationService.findStationByName(originStationName),
+    context.stationService.findStationByName(destinationStationName),
+    context.realtimeClient.getServiceAlerts(),
+  ]);
+  const stationIds = new Set(
+    [originStation?.stop_id, destinationStation?.stop_id].filter((id): id is string => Boolean(id))
+  );
+  const routeIds = new Set(
+    options.flatMap((option) => ROUTE_IDS_BY_NAME[option.route_name.toLowerCase()] || [])
+  );
+
+  return alerts
+    .filter((alert) =>
+      alert.informed_entities.some(
+        (entity) =>
+          (entity.route_id && routeIds.has(entity.route_id)) ||
+          (entity.stop_id && stationIds.has(entity.stop_id))
+      )
+    )
+    .map((alert) => ({
+      id: alert.alert_id,
+      header: alert.header_text,
+      description: alert.description_text,
+      cause: alert.cause,
+      effect: alert.effect,
+    }));
+}

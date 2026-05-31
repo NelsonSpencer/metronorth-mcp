@@ -110,21 +110,6 @@ export interface StopTimeUpdate {
   schedule_relationship: string | null;
 }
 
-export interface VehiclePosition {
-  trip_id: string | null;
-  route_id: string | null;
-  vehicle_id: string;
-  latitude: number;
-  longitude: number;
-  bearing: number | null;
-  speed: number | null;
-  current_stop_sequence: number | null;
-  current_status: string | null;
-  timestamp: number | null;
-  congestion_level: string | null;
-  occupancy_status: string | null;
-}
-
 export interface ServiceAlert {
   alert_id: string;
   cause: string | null;

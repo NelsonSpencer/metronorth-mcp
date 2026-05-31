@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { handleToolCall, toolDefinitions } from '../src/tools/index.js';
+import { toolHandlers } from '../src/tools/handlers.js';
+import { packageMetadata } from '../src/package-metadata.js';
 
 // Mock the database and services for testing
 vi.mock('../src/infrastructure/database.js', () => ({
@@ -38,16 +40,19 @@ describe('Tool Definitions', () => {
   it('should have all required tools', () => {
     const toolNames = toolDefinitions.map((t) => t.name);
 
-    expect(toolNames).toContain('get_departures');
-    expect(toolNames).toContain('get_trip_details');
-    expect(toolNames).toContain('get_route_schedule');
-    expect(toolNames).toContain('get_service_alerts');
-    expect(toolNames).toContain('search_stations');
-    expect(toolNames).toContain('get_station_info');
-    expect(toolNames).toContain('get_system_status');
-    expect(toolNames).toContain('get_station_pair_schedule');
-    expect(toolNames).toContain('get_first_last_trains');
-    expect(toolNames).toContain('plan_metro_north_trip');
+    expect(toolDefinitions).toHaveLength(10);
+    expect(toolNames).toEqual([
+      'get_departures',
+      'get_trip_details',
+      'get_route_schedule',
+      'get_service_alerts',
+      'search_stations',
+      'get_station_info',
+      'get_system_status',
+      'get_station_pair_schedule',
+      'get_first_last_trains',
+      'plan_metro_north_trip',
+    ]);
   });
 
   it('should have valid input schemas', () => {
@@ -63,6 +68,81 @@ describe('Tool Definitions', () => {
       expect(tool.description).toBeDefined();
       expect(tool.description.length).toBeGreaterThan(10);
     }
+  });
+
+  it('keeps tool definitions and handlers in sync', () => {
+    expect(Object.keys(toolHandlers).sort()).toEqual(
+      toolDefinitions.map((tool) => tool.name).sort()
+    );
+  });
+});
+
+describe('Tool Result Contract', () => {
+  it('returns the stable structured success shape with explicit services', async () => {
+    const stationService = {
+      findStationByName: vi.fn(),
+      getStationInfo: vi.fn(),
+      searchStations: vi.fn(async () => [
+        {
+          stop_id: 'GCT',
+          stop_name: 'Grand Central Terminal',
+          zone_id: '1',
+        },
+      ]),
+    };
+    const structuredContent = {
+      query: 'Grand',
+      results: [
+        {
+          stop_id: 'GCT',
+          name: 'Grand Central Terminal',
+          zone: '1',
+        },
+      ],
+      total: 1,
+    };
+
+    const result = await handleToolCall(
+      'search_stations',
+      {
+        query: 'Grand',
+        limit: 1,
+      },
+      { stationService }
+    );
+
+    expect(result).toEqual({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(structuredContent, null, 2),
+        },
+      ],
+      structuredContent,
+    });
+    expect(result.isError).toBeUndefined();
+    expect(stationService.searchStations).toHaveBeenCalledWith('Grand', 1);
+  });
+
+  it('returns the stable structured error shape', async () => {
+    const result = await handleToolCall('get_departures', {});
+    const error = result.structuredContent?.error as Record<string, unknown>;
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toEqual({
+      error: {
+        code: 'invalid_arguments',
+        message: error.message,
+        tool: 'get_departures',
+        request_id: expect.any(String),
+      },
+    });
+    expect(result.content).toEqual([
+      {
+        type: 'text',
+        text: `Error: ${error.message}`,
+      },
+    ]);
   });
 });
 
@@ -113,7 +193,11 @@ describe('Tool Handlers', () => {
       expect(status.status).toBe('operational');
       expect(result.structuredContent?.status).toBe('operational');
       expect(status.server).toBeDefined();
-      expect(status.server.version).toBe('2.0.0');
+      expect(status.server.version).toBe(packageMetadata.version);
+      expect(result.structuredContent?.server).toMatchObject({
+        name: packageMetadata.name,
+        version: packageMetadata.version,
+      });
     });
   });
 
@@ -126,10 +210,14 @@ describe('Tool Handlers', () => {
 
 describe('Input Validation', () => {
   it('should validate direction enum', async () => {
-    const result = await handleToolCall('get_departures', {
-      station_name: 'Grand Central',
-      direction: 'invalid_direction',
-    });
+    const result = await handleToolCall(
+      'get_departures',
+      {
+        station_name: 'Grand Central',
+        direction: 'invalid_direction',
+      },
+      { requestId: 'validation-test' }
+    );
 
     const text = result.content[0].text;
     expect(text).toContain('Error');
@@ -137,6 +225,7 @@ describe('Input Validation', () => {
     expect(result.structuredContent?.error).toMatchObject({
       code: 'invalid_arguments',
       tool: 'get_departures',
+      request_id: 'validation-test',
     });
   });
 

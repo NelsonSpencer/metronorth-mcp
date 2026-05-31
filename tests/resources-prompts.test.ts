@@ -5,7 +5,19 @@ import {
   resourceDefinitions,
   resourceTemplateDefinitions,
 } from '../src/resources.js';
+import { handleToolCall } from '../src/tools/index.js';
 import { handleGetPrompt, promptDefinitions } from '../src/prompts.js';
+import { packageMetadata } from '../src/package-metadata.js';
+
+interface StatusPayload {
+  status: string;
+  gtfs_data: unknown;
+  realtime: unknown;
+  server: {
+    name: string;
+    version: string;
+  };
+}
 
 vi.mock('../src/infrastructure/database.js', () => ({
   getMetadata: vi.fn((key: string) => {
@@ -71,9 +83,11 @@ describe('MCP resources', () => {
       'metronorth://routes',
       'metronorth://stations',
     ]);
+    expect(resourceDefinitions).toHaveLength(5);
     expect(resourceTemplateDefinitions[0].uriTemplate).toBe(
       'metronorth://station/{station_name}'
     );
+    expect(resourceTemplateDefinitions).toHaveLength(1);
   });
 
   it('reads agent usage resources as markdown', async () => {
@@ -95,6 +109,30 @@ describe('MCP resources', () => {
     expect(payload.gtfs_data.stops).toBe(2);
     expect(payload.gtfs_data.needs_update).toBe(false);
     expect(payload.realtime.available).toBe(true);
+    expect(payload.server.version).toBe(packageMetadata.version);
+  });
+
+  it('returns the same core system status shape from resource and tool', async () => {
+    const resourceResult = await handleReadResource('metronorth://system/status');
+    const resourcePayload = JSON.parse(resourceResult.contents[0].text) as StatusPayload;
+    const toolResult = await handleToolCall(
+      'get_system_status',
+      {},
+      { requestId: 'status-test' }
+    );
+    const toolPayload = toolResult.structuredContent as StatusPayload;
+
+    const normalize = (payload: StatusPayload) => ({
+      status: payload.status,
+      gtfs_data: payload.gtfs_data,
+      realtime: payload.realtime,
+      server: {
+        name: payload.server.name,
+        version: payload.server.version,
+      },
+    });
+
+    expect(normalize(resourcePayload)).toEqual(normalize(toolPayload));
   });
 
   it('reads the stations and station detail resources', async () => {
@@ -121,6 +159,7 @@ describe('MCP prompts', () => {
       'plan-metro-north-trip',
       'summarize-service-status',
     ]);
+    expect(promptDefinitions).toHaveLength(3);
   });
 
   it('returns the MCP usage prompt without arguments', () => {
