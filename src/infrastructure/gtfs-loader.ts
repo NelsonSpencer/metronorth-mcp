@@ -1,7 +1,7 @@
 import axios from 'axios';
 import AdmZip from 'adm-zip';
 import csv from 'csv-parser';
-import { Readable } from 'stream';
+import { Readable } from 'node:stream';
 import { config, GTFS_STATIC_URL } from '../config.js';
 import { createModuleLogger } from '../logger.js';
 import { getSqlite, transaction, setMetadata, getMetadata } from './database.js';
@@ -39,10 +39,6 @@ interface ParsedGTFS {
 }
 
 export class GTFSLoader {
-  constructor(_dataDir: string = './data') {
-    // Data dir can be used for caching in the future
-  }
-
   async needsUpdate(): Promise<boolean> {
     const lastUpdate = getMetadata('gtfs_last_update');
     if (!lastUpdate) return true;
@@ -57,7 +53,7 @@ export class GTFSLoader {
   async downloadGTFS(): Promise<Buffer> {
     logger.info({ url: GTFS_STATIC_URL }, 'Downloading GTFS static data');
 
-    const response = await axios.get(GTFS_STATIC_URL, {
+    const response = await axios.get<ArrayBuffer>(GTFS_STATIC_URL, {
       responseType: 'arraybuffer',
       timeout: 60000,
       headers: {
@@ -65,8 +61,9 @@ export class GTFSLoader {
       },
     });
 
-    logger.info({ size: response.data.length }, 'GTFS download complete');
-    return Buffer.from(response.data);
+    const data = Buffer.from(response.data);
+    logger.info({ size: data.length }, 'GTFS download complete');
+    return data;
   }
 
   async extractAndParse(zipBuffer: Buffer): Promise<ParsedGTFS> {

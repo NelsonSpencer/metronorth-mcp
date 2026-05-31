@@ -111,7 +111,7 @@ class ToolDomainError extends Error {
   }
 }
 
-function parseArgs<T extends z.ZodTypeAny>(schema: T, args: Record<string, unknown>): z.infer<T> {
+function parseArgs<T>(schema: z.ZodType<T>, args: Record<string, unknown>): T {
   const parsed = schema.safeParse(args);
   if (!parsed.success) {
     throw new ToolDomainError('invalid_arguments', fromError(parsed.error).toString());
