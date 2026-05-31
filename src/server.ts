@@ -120,8 +120,12 @@ export class MetroNorthMCPServer {
       process.exit(0);
     };
 
-    process.on('SIGINT', () => shutdown('SIGINT'));
-    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => {
+      void shutdown('SIGINT');
+    });
+    process.on('SIGTERM', () => {
+      void shutdown('SIGTERM');
+    });
   }
 
   async initialize(): Promise<void> {

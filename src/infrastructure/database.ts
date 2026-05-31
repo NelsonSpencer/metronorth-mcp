@@ -1,18 +1,15 @@
 import Database from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
+import fs from 'node:fs';
+import path from 'node:path';
 import { config } from '../config.js';
 import { createModuleLogger } from '../logger.js';
-import * as schema from './schema.js';
-import path from 'path';
-import fs from 'fs';
 
 const logger = createModuleLogger('database');
 
-let db: ReturnType<typeof drizzle> | null = null;
 let sqlite: Database.Database | null = null;
 
-export function getDatabase() {
-  if (db) return db;
+export function getDatabase(): Database.Database {
+  if (sqlite) return sqlite;
 
   // Ensure db directory exists
   const dbDir = path.dirname(config.DB_PATH);
@@ -28,19 +25,14 @@ export function getDatabase() {
   sqlite.pragma('cache_size = 10000');
   sqlite.pragma('temp_store = MEMORY');
 
-  db = drizzle(sqlite, { schema });
-
   // Initialize schema
   initializeSchema();
 
-  return db;
+  return sqlite;
 }
 
 export function getSqlite(): Database.Database {
-  if (!sqlite) {
-    getDatabase();
-  }
-  return sqlite!;
+  return sqlite ?? getDatabase();
 }
 
 export function closeDatabase() {
@@ -48,7 +40,6 @@ export function closeDatabase() {
     logger.info('Closing database connection');
     sqlite.close();
     sqlite = null;
-    db = null;
   }
 }
 

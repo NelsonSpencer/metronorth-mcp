@@ -3,6 +3,9 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 const client = new Client(
   {
@@ -13,6 +16,14 @@ const client = new Client(
     capabilities: {},
   }
 );
+
+const smokeDir = mkdtempSync(path.join(tmpdir(), 'metronorth-mcp-smoke-'));
+const smokeDbPath = path.join(smokeDir, 'metronorth.db');
+
+process.env.NODE_ENV = 'test';
+process.env.LOG_LEVEL = process.env.LOG_LEVEL || 'error';
+process.env.DB_PATH = smokeDbPath;
+delete process.env.REDIS_URL;
 
 const transport = new StdioClientTransport({
   command: process.execPath,
@@ -28,6 +39,7 @@ async function main() {
   });
 
   try {
+    await seedSmokeDatabase();
     await client.connect(transport);
 
     const tools = await client.listTools();
@@ -99,6 +111,9 @@ async function main() {
     if (!tripPlan.structuredContent || tripPlan.isError) {
       throw new Error('plan_metro_north_trip did not return structured successful content');
     }
+    if (!tripPlan.structuredContent.recommended_option) {
+      throw new Error('plan_metro_north_trip did not return a recommended option');
+    }
 
     const systemResource = await client.readResource({
       uri: 'metronorth://system/status',
@@ -145,7 +160,130 @@ async function main() {
     throw error;
   } finally {
     await client.close();
+    rmSync(smokeDir, { recursive: true, force: true });
   }
+}
+
+async function seedSmokeDatabase() {
+  const {
+    closeDatabase,
+    getDatabase,
+    runStatement,
+    setMetadata,
+    transaction,
+  } = await import('../build/infrastructure/database.js');
+  const { getMetroNorthServiceContext } = await import('../build/domain/transit-time.js');
+  const { serviceDate, serviceDateCompact } = getMetroNorthServiceContext();
+  const now = new Date().toISOString();
+
+  getDatabase();
+
+  transaction(() => {
+    runStatement('DELETE FROM stop_times');
+    runStatement('DELETE FROM trips');
+    runStatement('DELETE FROM routes');
+    runStatement('DELETE FROM stops');
+    runStatement('DELETE FROM calendar');
+    runStatement('DELETE FROM calendar_dates');
+    runStatement('DELETE FROM agency');
+    runStatement('DELETE FROM metadata');
+
+    runStatement(
+      `INSERT INTO agency (agency_id, agency_name, agency_url, agency_timezone)
+       VALUES (?, ?, ?, ?)`,
+      ['MNR', 'Metro-North Railroad', 'https://new.mta.info/agency/metro-north-railroad', 'America/New_York']
+    );
+
+    runStatement(
+      `INSERT INTO stops (stop_id, stop_name, stop_lat, stop_lon, location_type, wheelchair_boarding)
+       VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)`,
+      [
+        'GCT',
+        'Grand Central Terminal',
+        40.7527,
+        -73.9772,
+        1,
+        1,
+        'WP',
+        'White Plains',
+        41.033,
+        -73.7757,
+        1,
+        1,
+      ]
+    );
+
+    runStatement(
+      `INSERT INTO routes (route_id, agency_id, route_long_name, route_type)
+       VALUES (?, ?, ?, ?)`,
+      ['2', 'MNR', 'Harlem', 2]
+    );
+
+    runStatement(
+      `INSERT INTO calendar (
+         service_id, monday, tuesday, wednesday, thursday, friday, saturday, sunday, start_date, end_date
+       )
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['SMOKE', 1, 1, 1, 1, 1, 1, 1, serviceDateCompact, serviceDateCompact]
+    );
+
+    runStatement(
+      `INSERT INTO trips (
+         trip_id, route_id, service_id, trip_headsign, trip_short_name, direction_id
+       )
+       VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)`,
+      [
+        'smoke-trip-1',
+        '2',
+        'SMOKE',
+        'White Plains',
+        '9001',
+        0,
+        'smoke-trip-2',
+        '2',
+        'SMOKE',
+        'White Plains',
+        '9002',
+        0,
+      ]
+    );
+
+    runStatement(
+      `INSERT INTO stop_times (
+         trip_id, arrival_time, departure_time, stop_id, stop_sequence
+       )
+       VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?), (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)`,
+      [
+        'smoke-trip-1',
+        '05:00:00',
+        '05:00:00',
+        'GCT',
+        1,
+        'smoke-trip-1',
+        '05:42:00',
+        '05:42:00',
+        'WP',
+        2,
+        'smoke-trip-2',
+        '06:00:00',
+        '06:00:00',
+        'GCT',
+        1,
+        'smoke-trip-2',
+        '06:42:00',
+        '06:42:00',
+        'WP',
+        2,
+      ]
+    );
+  });
+
+  setMetadata('gtfs_last_update', now);
+  setMetadata('gtfs_stops_count', '2');
+  setMetadata('gtfs_trips_count', '2');
+  setMetadata('gtfs_smoke_service_date', serviceDate);
+
+  closeDatabase();
 }
 
 function assertIncludes(values, expected, message) {
