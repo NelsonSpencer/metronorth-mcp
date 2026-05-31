@@ -171,10 +171,6 @@ export const GetDeparturesSchema = z.object({
     .describe('Include real-time delay information if available'),
 });
 
-export const GetLiveStatusSchema = z.object({
-  trip_id: z.string().describe('The GTFS trip ID to get status for'),
-});
-
 export const GetRouteScheduleSchema = z.object({
   route_name: z
     .string()
@@ -223,6 +219,127 @@ export const GetTripDetailsSchema = z.object({
 export const GetStationInfoSchema = z.object({
   station_name: z.string().min(2).describe('Station name to look up'),
 });
+
+type JsonSchemaProperty = {
+  type: string;
+  description?: string;
+  enum?: string[];
+  default?: string | number | boolean;
+  minimum?: number;
+  maximum?: number;
+  pattern?: string;
+};
+
+type JsonObjectSchema = {
+  type: 'object';
+  properties: Record<string, JsonSchemaProperty>;
+  required?: string[];
+};
+
+const stringProperty = (
+  description: string,
+  options: Omit<JsonSchemaProperty, 'type' | 'description'> = {}
+): JsonSchemaProperty => ({
+  type: 'string',
+  description,
+  ...options,
+});
+
+const numberProperty = (
+  description: string,
+  options: Omit<JsonSchemaProperty, 'type' | 'description'> = {}
+): JsonSchemaProperty => ({
+  type: 'number',
+  description,
+  ...options,
+});
+
+const booleanProperty = (
+  description: string,
+  options: Omit<JsonSchemaProperty, 'type' | 'description'> = {}
+): JsonSchemaProperty => ({
+  type: 'boolean',
+  description,
+  ...options,
+});
+
+export const ToolInputSchemas = {
+  get_departures: {
+    type: 'object',
+    properties: {
+      station_name: stringProperty(
+        'Station name (partial match supported, e.g., "Grand Central" or "Harlem")'
+      ),
+      direction: stringProperty('Direction of travel: inbound (to GCT), outbound (from GCT), or all', {
+        enum: ['inbound', 'outbound', 'all'],
+        default: 'all',
+      }),
+      limit: numberProperty('Maximum number of departures to return (1-50)', {
+        default: 10,
+        minimum: 1,
+        maximum: 50,
+      }),
+      include_realtime: booleanProperty('Include real-time delay information if available', {
+        default: true,
+      }),
+    },
+    required: ['station_name'],
+  },
+  get_trip_details: {
+    type: 'object',
+    properties: {
+      trip_id: stringProperty('The GTFS trip ID'),
+      include_realtime: booleanProperty('Include real-time delay information', {
+        default: true,
+      }),
+    },
+    required: ['trip_id'],
+  },
+  get_route_schedule: {
+    type: 'object',
+    properties: {
+      route_name: stringProperty('Route/line name (e.g., "Hudson", "Harlem", "New Haven")'),
+      date: stringProperty('Date in YYYY-MM-DD format (defaults to today)', {
+        pattern: '^\\d{4}-\\d{2}-\\d{2}$',
+      }),
+      direction: stringProperty('Direction of travel', {
+        enum: ['inbound', 'outbound', 'all'],
+        default: 'all',
+      }),
+    },
+    required: ['route_name'],
+  },
+  get_service_alerts: {
+    type: 'object',
+    properties: {
+      route_name: stringProperty('Filter alerts by route/line name'),
+      station_name: stringProperty('Filter alerts by station name'),
+    },
+  },
+  search_stations: {
+    type: 'object',
+    properties: {
+      query: stringProperty('Search query for station names'),
+      limit: numberProperty('Maximum number of results (1-20)', {
+        default: 5,
+        minimum: 1,
+        maximum: 20,
+      }),
+    },
+    required: ['query'],
+  },
+  get_station_info: {
+    type: 'object',
+    properties: {
+      station_name: stringProperty('Station name to look up'),
+    },
+    required: ['station_name'],
+  },
+  get_system_status: {
+    type: 'object',
+    properties: {},
+  },
+} satisfies Record<string, JsonObjectSchema>;
 
 // ============================================================================
 // Output Types
@@ -277,7 +394,6 @@ export interface TripRealtimeStatus {
 
 // Type exports for schema inference
 export type GetDeparturesInput = z.infer<typeof GetDeparturesSchema>;
-export type GetLiveStatusInput = z.infer<typeof GetLiveStatusSchema>;
 export type GetRouteScheduleInput = z.infer<typeof GetRouteScheduleSchema>;
 export type GetServiceAlertsInput = z.infer<typeof GetServiceAlertsSchema>;
 export type SearchStationsInput = z.infer<typeof SearchStationsSchema>;

@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
+const queryLog = vi.hoisted(() => ({
+  queries: [] as string[],
+}));
+
 vi.mock('../src/infrastructure/database.js', () => {
   const prepare = vi.fn((query: string) => {
+    queryLog.queries.push(query);
+
     if (query.includes('FROM calendar') && query.includes('start_date')) {
       return {
         all: vi.fn(() => [{ service_id: 'weekday' }]),
@@ -85,5 +91,18 @@ describe('ScheduleService', () => {
     expect(departures[0].delay_minutes).toBe(5);
     expect(departures[0].actual_departure).toBe('12:05');
     expect(departures[0].status).toBe('delayed');
+  });
+
+  it('filters outbound trips using Metro-North direction_id 0', async () => {
+    queryLog.queries = [];
+    const { ScheduleService } = await import('../src/infrastructure/schedule-service.js');
+    const service = new ScheduleService();
+
+    await service.getDepartures('Grand Central', 'outbound', 1, false);
+
+    const departureQuery = queryLog.queries.find(
+      (query) => query.includes('FROM stop_times st') && query.includes('JOIN trips t')
+    );
+    expect(departureQuery).toContain('AND t.direction_id = 0');
   });
 });

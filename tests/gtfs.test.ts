@@ -2,10 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import {
   GetDeparturesSchema,
-  GetLiveStatusSchema,
   GetRouteScheduleSchema,
   SearchStationsSchema,
   GetStationInfoSchema,
+  ToolInputSchemas,
 } from '../src/domain/gtfs.js';
 
 describe('GTFS Schemas', () => {
@@ -58,20 +58,6 @@ describe('GTFS Schemas', () => {
 
       expect(GetDeparturesSchema.safeParse(input1).success).toBe(false);
       expect(GetDeparturesSchema.safeParse(input2).success).toBe(false);
-    });
-  });
-
-  describe('GetLiveStatusSchema', () => {
-    it('should accept valid trip_id', () => {
-      const input = { trip_id: 'TRAIN_123' };
-      const result = GetLiveStatusSchema.safeParse(input);
-      expect(result.success).toBe(true);
-    });
-
-    it('should reject missing trip_id', () => {
-      const input = {};
-      const result = GetLiveStatusSchema.safeParse(input);
-      expect(result.success).toBe(false);
     });
   });
 
@@ -145,6 +131,20 @@ describe('GTFS Schemas', () => {
       const input = { station_name: 'X' };
       const result = GetStationInfoSchema.safeParse(input);
       expect(result.success).toBe(false);
+    });
+  });
+
+  describe('ToolInputSchemas', () => {
+    it('keeps MCP tool schemas colocated with validation schemas', () => {
+      expect(ToolInputSchemas.get_departures.required).toContain('station_name');
+      expect(ToolInputSchemas.get_departures.properties.direction.enum).toEqual([
+        'inbound',
+        'outbound',
+        'all',
+      ]);
+      expect(ToolInputSchemas.get_route_schedule.properties.date.pattern).toBe(
+        '^\\d{4}-\\d{2}-\\d{2}$'
+      );
     });
   });
 });

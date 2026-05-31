@@ -1,0 +1,112 @@
+#!/usr/bin/env node
+
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
+
+const client = new Client(
+  {
+    name: 'metronorth-mcp-smoke',
+    version: '1.0.0',
+  },
+  {
+    capabilities: {},
+  }
+);
+
+const transport = new StdioClientTransport({
+  command: process.execPath,
+  args: ['build/index.js'],
+  cwd: process.cwd(),
+  stderr: 'pipe',
+});
+
+async function main() {
+  let stderr = '';
+  transport.stderr?.on('data', (chunk) => {
+    stderr += chunk.toString();
+  });
+
+  try {
+    await client.connect(transport);
+
+    const tools = await client.listTools();
+    const resources = await client.listResources();
+    const resourceTemplates = await client.listResourceTemplates();
+    const prompts = await client.listPrompts();
+
+    assertIncludes(
+      tools.tools.map((tool) => tool.name),
+      'get_system_status',
+      'tools/list did not include get_system_status'
+    );
+    assertIncludes(
+      resources.resources.map((resource) => resource.uri),
+      'metronorth://system/status',
+      'resources/list did not include system status'
+    );
+    assertIncludes(
+      resourceTemplates.resourceTemplates.map((template) => template.uriTemplate),
+      'metronorth://station/{station_name}',
+      'resources/templates/list did not include station template'
+    );
+    assertIncludes(
+      prompts.prompts.map((prompt) => prompt.name),
+      'plan-metro-north-trip',
+      'prompts/list did not include plan-metro-north-trip'
+    );
+
+    const status = await client.callTool(
+      {
+        name: 'get_system_status',
+        arguments: {},
+      },
+      CallToolResultSchema
+    );
+    if (!status.structuredContent || status.isError) {
+      throw new Error('get_system_status did not return structured successful content');
+    }
+
+    const systemResource = await client.readResource({
+      uri: 'metronorth://system/status',
+    });
+    if (!systemResource.contents[0]?.text.includes('gtfs_data')) {
+      throw new Error('system status resource did not include GTFS data');
+    }
+
+    const prompt = await client.getPrompt({
+      name: 'plan-metro-north-trip',
+      arguments: {
+        origin: 'Grand Central',
+        destination: 'White Plains',
+      },
+    });
+    if (!prompt.messages[0]?.content || prompt.messages[0].content.type !== 'text') {
+      throw new Error('plan-metro-north-trip did not return a text prompt message');
+    }
+
+    console.log('Metro-North MCP protocol smoke check passed.');
+    console.log(`Tools: ${tools.tools.length}`);
+    console.log(`Resources: ${resources.resources.length}`);
+    console.log(`Resource templates: ${resourceTemplates.resourceTemplates.length}`);
+    console.log(`Prompts: ${prompts.prompts.length}`);
+  } catch (error) {
+    if (stderr.trim()) {
+      console.error(stderr.trim());
+    }
+    throw error;
+  } finally {
+    await client.close();
+  }
+}
+
+function assertIncludes(values, expected, message) {
+  if (!values.includes(expected)) {
+    throw new Error(`${message}. Found: ${values.join(', ')}`);
+  }
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+});

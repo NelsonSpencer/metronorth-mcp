@@ -1,4 +1,6 @@
 import { fromError } from 'zod-validation-error';
+import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
+import type { z } from 'zod';
 import {
   GetDeparturesSchema,
   GetRouteScheduleSchema,
@@ -6,6 +8,7 @@ import {
   SearchStationsSchema,
   GetTripDetailsSchema,
   GetStationInfoSchema,
+  ToolInputSchemas,
 } from '../domain/gtfs.js';
 import { getScheduleService } from '../infrastructure/schedule-service.js';
 import { getStationService } from '../infrastructure/station-service.js';
@@ -14,6 +17,7 @@ import { getGTFSLoader } from '../infrastructure/gtfs-loader.js';
 import { getMetadata } from '../infrastructure/database.js';
 import { createModuleLogger, logRequest } from '../logger.js';
 import { ROUTE_IDS_BY_NAME } from '../config.js';
+import { getMetroNorthServiceContext } from '../domain/transit-time.js';
 
 const logger = createModuleLogger('tools');
 
@@ -21,145 +25,104 @@ const logger = createModuleLogger('tools');
 export const toolDefinitions = [
   {
     name: 'get_departures',
+    title: 'Get Departures',
     description:
       'Get upcoming Metro-North train departures from a station. Returns scheduled and real-time departure information including delays.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        station_name: {
-          type: 'string',
-          description: 'Station name (partial match supported, e.g., "Grand Central" or "Harlem")',
-        },
-        direction: {
-          type: 'string',
-          enum: ['inbound', 'outbound', 'all'],
-          default: 'all',
-          description: 'Direction of travel: inbound (to GCT), outbound (from GCT), or all',
-        },
-        limit: {
-          type: 'number',
-          default: 10,
-          description: 'Maximum number of departures to return (1-50)',
-        },
-        include_realtime: {
-          type: 'boolean',
-          default: true,
-          description: 'Include real-time delay information if available',
-        },
-      },
-      required: ['station_name'],
-    },
+    inputSchema: ToolInputSchemas.get_departures,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
   {
     name: 'get_trip_details',
+    title: 'Get Trip Details',
     description:
       'Get detailed information about a specific train trip, including all stops and times.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        trip_id: {
-          type: 'string',
-          description: 'The GTFS trip ID',
-        },
-        include_realtime: {
-          type: 'boolean',
-          default: true,
-          description: 'Include real-time delay information',
-        },
-      },
-      required: ['trip_id'],
-    },
+    inputSchema: ToolInputSchemas.get_trip_details,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
   {
     name: 'get_route_schedule',
+    title: 'Get Route Schedule',
     description: 'Get the full schedule for a Metro-North line/route for today.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        route_name: {
-          type: 'string',
-          description: 'Route/line name (e.g., "Hudson", "Harlem", "New Haven")',
-        },
-        date: {
-          type: 'string',
-          description: 'Date in YYYY-MM-DD format (defaults to today)',
-        },
-        direction: {
-          type: 'string',
-          enum: ['inbound', 'outbound', 'all'],
-          default: 'all',
-          description: 'Direction of travel',
-        },
-      },
-      required: ['route_name'],
-    },
+    inputSchema: ToolInputSchemas.get_route_schedule,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
   {
     name: 'get_service_alerts',
+    title: 'Get Service Alerts',
     description: 'Get current service alerts and advisories for Metro-North.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        route_name: {
-          type: 'string',
-          description: 'Filter alerts by route/line name',
-        },
-        station_name: {
-          type: 'string',
-          description: 'Filter alerts by station name',
-        },
-      },
-    },
+    inputSchema: ToolInputSchemas.get_service_alerts,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
   {
     name: 'search_stations',
+    title: 'Search Stations',
     description: 'Search for Metro-North stations by name.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description: 'Search query for station names',
-        },
-        limit: {
-          type: 'number',
-          default: 5,
-          description: 'Maximum number of results (1-20)',
-        },
-      },
-      required: ['query'],
-    },
+    inputSchema: ToolInputSchemas.search_stations,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
   {
     name: 'get_station_info',
+    title: 'Get Station Info',
     description: 'Get detailed information about a specific Metro-North station.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        station_name: {
-          type: 'string',
-          description: 'Station name to look up',
-        },
-      },
-      required: ['station_name'],
-    },
+    inputSchema: ToolInputSchemas.get_station_info,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
   {
     name: 'get_system_status',
+    title: 'Get System Status',
     description:
       'Get the current status of the Metro-North MCP server, including data freshness and connectivity.',
-    inputSchema: {
-      type: 'object',
-      properties: {},
-    },
+    inputSchema: ToolInputSchemas.get_system_status,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
-];
+] satisfies Tool[];
+
+class UnknownToolError extends Error {}
+
+class ToolDomainError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly details?: Record<string, unknown>
+  ) {
+    super(message);
+  }
+}
+
+function parseArgs<T extends z.ZodTypeAny>(schema: T, args: Record<string, unknown>): z.infer<T> {
+  const parsed = schema.safeParse(args);
+  if (!parsed.success) {
+    throw new ToolDomainError('invalid_arguments', fromError(parsed.error).toString());
+  }
+
+  return parsed.data;
+}
+
+function asStructuredContent(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : { value };
+}
+
+function toToolResult(result: unknown): CallToolResult {
+  const structuredContent = asStructuredContent(result);
+
+  return {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify(structuredContent, null, 2),
+      },
+    ],
+    structuredContent,
+  };
+}
 
 // Tool handlers
 export async function handleToolCall(
   name: string,
   args: Record<string, unknown>
-): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
+): Promise<CallToolResult> {
   const start = Date.now();
   let success = true;
 
@@ -189,20 +152,19 @@ export async function handleToolCall(
         result = await handleGetSystemStatus();
         break;
       default:
-        throw new Error(`Unknown tool: ${name}`);
+        throw new UnknownToolError(`Unknown tool: ${name}`);
     }
 
-    return {
-      content: [
-        {
-          type: 'text',
-          text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
-        },
-      ],
-    };
+    return toToolResult(result);
   } catch (error) {
+    if (error instanceof UnknownToolError) {
+      success = false;
+      throw error;
+    }
+
     success = false;
     const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorCode = error instanceof ToolDomainError ? error.code : 'tool_error';
     logger.error({ tool: name, error: errorMessage }, 'Tool execution failed');
 
     return {
@@ -212,6 +174,15 @@ export async function handleToolCall(
           text: `Error: ${errorMessage}`,
         },
       ],
+      structuredContent: {
+        error: {
+          code: errorCode,
+          message: errorMessage,
+          tool: name,
+          ...(error instanceof ToolDomainError && error.details ? error.details : {}),
+        },
+      },
+      isError: true,
     };
   } finally {
     logRequest(name, args, Date.now() - start, success);
@@ -219,12 +190,8 @@ export async function handleToolCall(
 }
 
 async function handleGetDepartures(args: Record<string, unknown>) {
-  const parsed = GetDeparturesSchema.safeParse(args);
-  if (!parsed.success) {
-    throw new Error(fromError(parsed.error).toString());
-  }
-
-  const { station_name, direction, limit, include_realtime } = parsed.data;
+  const parsed = parseArgs(GetDeparturesSchema, args);
+  const { station_name, direction, limit, include_realtime } = parsed;
   const scheduleService = getScheduleService();
 
   const departures = await scheduleService.getDepartures(
@@ -235,14 +202,13 @@ async function handleGetDepartures(args: Record<string, unknown>) {
   );
 
   if (departures.length === 0) {
-    return {
-      message: `No upcoming departures found from "${station_name}"`,
+    throw new ToolDomainError('not_found', `No upcoming departures found from "${station_name}"`, {
       suggestions: [
         'Check the station name spelling',
         'Try a partial name like "Grand" for Grand Central',
         'Use search_stations to find the correct station name',
       ],
-    };
+    });
   }
 
   return {
@@ -262,21 +228,15 @@ async function handleGetDepartures(args: Record<string, unknown>) {
 }
 
 async function handleGetTripDetails(args: Record<string, unknown>) {
-  const parsed = GetTripDetailsSchema.safeParse(args);
-  if (!parsed.success) {
-    throw new Error(fromError(parsed.error).toString());
-  }
-
-  const { trip_id, include_realtime } = parsed.data;
+  const { trip_id, include_realtime } = parseArgs(GetTripDetailsSchema, args);
   const scheduleService = getScheduleService();
 
   const details = await scheduleService.getTripDetails(trip_id, include_realtime);
 
   if (!details) {
-    return {
-      error: `Trip "${trip_id}" not found`,
+    throw new ToolDomainError('not_found', `Trip "${trip_id}" not found`, {
       suggestion: 'Use get_departures first to find valid trip IDs',
-    };
+    });
   }
 
   return {
@@ -295,27 +255,20 @@ async function handleGetTripDetails(args: Record<string, unknown>) {
 }
 
 async function handleGetRouteSchedule(args: Record<string, unknown>) {
-  const parsed = GetRouteScheduleSchema.safeParse(args);
-  if (!parsed.success) {
-    throw new Error(fromError(parsed.error).toString());
-  }
-
-  const { route_name, date, direction } = parsed.data;
+  const { route_name, date, direction } = parseArgs(GetRouteScheduleSchema, args);
   const scheduleService = getScheduleService();
 
-  const scheduleDate = date ? new Date(date) : new Date();
-  const schedule = await scheduleService.getRouteSchedule(route_name, scheduleDate, direction);
+  const schedule = await scheduleService.getRouteSchedule(route_name, date, direction);
 
   if (schedule.length === 0) {
-    return {
-      error: `No schedule found for route "${route_name}"`,
+    throw new ToolDomainError('not_found', `No schedule found for route "${route_name}"`, {
       available_routes: ['Hudson', 'Harlem', 'New Haven', 'New Canaan', 'Danbury', 'Waterbury'],
-    };
+    });
   }
 
   return {
     route: route_name,
-    date: scheduleDate.toISOString().slice(0, 10),
+    date: date || getMetroNorthServiceContext().serviceDate,
     direction,
     trips: schedule.map((t) => ({
       trip_id: t.trip_id,
@@ -327,12 +280,7 @@ async function handleGetRouteSchedule(args: Record<string, unknown>) {
 }
 
 async function handleGetServiceAlerts(args: Record<string, unknown>) {
-  const parsed = GetServiceAlertsSchema.safeParse(args);
-  if (!parsed.success) {
-    throw new Error(fromError(parsed.error).toString());
-  }
-
-  const { route_name, station_name } = parsed.data;
+  const { route_name, station_name } = parseArgs(GetServiceAlertsSchema, args);
   const realtimeClient = getRealtimeClient();
 
   const alerts = await realtimeClient.getServiceAlerts();
@@ -349,11 +297,15 @@ async function handleGetServiceAlerts(args: Record<string, unknown>) {
   if (station_name) {
     const stationService = getStationService();
     const station = await stationService.findStationByName(station_name);
-    if (station) {
-      filtered = filtered.filter((a) =>
-        a.informed_entities.some((e) => e.stop_id === station.stop_id)
-      );
+    if (!station) {
+      throw new ToolDomainError('not_found', `Station "${station_name}" not found`, {
+        suggestion: 'Use search_stations to find the correct station name',
+      });
     }
+
+    filtered = filtered.filter((a) =>
+      a.informed_entities.some((e) => e.stop_id === station.stop_id)
+    );
   }
 
   return {
@@ -373,12 +325,7 @@ async function handleGetServiceAlerts(args: Record<string, unknown>) {
 }
 
 async function handleSearchStations(args: Record<string, unknown>) {
-  const parsed = SearchStationsSchema.safeParse(args);
-  if (!parsed.success) {
-    throw new Error(fromError(parsed.error).toString());
-  }
-
-  const { query, limit } = parsed.data;
+  const { query, limit } = parseArgs(SearchStationsSchema, args);
   const stationService = getStationService();
 
   const stations = await stationService.searchStations(query, limit);
@@ -395,21 +342,15 @@ async function handleSearchStations(args: Record<string, unknown>) {
 }
 
 async function handleGetStationInfo(args: Record<string, unknown>) {
-  const parsed = GetStationInfoSchema.safeParse(args);
-  if (!parsed.success) {
-    throw new Error(fromError(parsed.error).toString());
-  }
-
-  const { station_name } = parsed.data;
+  const { station_name } = parseArgs(GetStationInfoSchema, args);
   const stationService = getStationService();
 
   const info = await stationService.getStationInfo(station_name);
 
   if (!info) {
-    return {
-      error: `Station "${station_name}" not found`,
+    throw new ToolDomainError('not_found', `Station "${station_name}" not found`, {
       suggestion: 'Use search_stations to find the correct station name',
-    };
+    });
   }
 
   return {

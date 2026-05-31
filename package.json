@@ -12,6 +12,7 @@
     "build": "tsc",
     "start": "node build/index.js",
     "smoke": "npm run build && node scripts/smoke.mjs",
+    "smoke:mcp": "npm run build && node scripts/smoke-mcp.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint src/",

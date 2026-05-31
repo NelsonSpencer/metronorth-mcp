@@ -29,6 +29,8 @@ This project uses public MTA feeds and does not require an MTA API key.
 
 ## Available Tools
 
+Tool results include readable text content and MCP `structuredContent` so assistants can show a useful answer while clients can still consume the response as data. Tool-domain failures, such as invalid arguments or unknown stations, return MCP tool errors with structured error details.
+
 ### `search_stations`
 
 Search for Metro-North stations by name.
@@ -141,6 +143,24 @@ Check server status, local GTFS freshness, cached stop/trip counts, and real-tim
 {}
 ```
 
+## MCP Resources And Prompts
+
+The server also exposes a small read-only MCP resource layer for stable reference data:
+
+- `metronorth://system/status`
+- `metronorth://routes`
+- `metronorth://stations`
+- `metronorth://station/{station_name}`
+
+Resources are for context that a client can read directly. Actions that need arguments, matching, or real-time lookup stay as tools.
+
+Prompt templates provide reusable assistant workflows:
+
+- `plan-metro-north-trip`
+- `summarize-service-status`
+
+They guide an assistant to combine station search, departures, service alerts, and data freshness checks without hiding the underlying tools.
+
 ## Quick Start
 
 ### Prerequisites
@@ -230,6 +250,7 @@ After loading GTFS data with `npm run gtfs:update`, run a real-data smoke check:
 
 ```bash
 npm run smoke
+npm run smoke:mcp
 ```
 
 Useful scripts:
@@ -261,6 +282,16 @@ MCP client
   -> local SQLite cache
   -> optional Redis cache
 ```
+
+## MCP Design Notes
+
+This project treats MCP tools, resources, and prompts as separate surfaces:
+
+- Tools handle dynamic questions like departures, alerts, route schedules, and station matching.
+- Resources expose read-only reference/context data like routes, stations, and system status.
+- Prompts provide repeatable assistant workflows for trip planning and service-status summaries.
+
+Static schedules are downloaded from public MTA GTFS feeds and stored locally in SQLite. Real-time data is fetched from public GTFS-Realtime feeds and should be treated as best-effort context rather than a guarantee.
 
 ## Project Status
 

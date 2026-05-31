@@ -2,11 +2,22 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   CallToolRequestSchema,
+  GetPromptRequestSchema,
   ListToolsRequestSchema,
+  ListPromptsRequestSchema,
+  ListResourcesRequestSchema,
+  ListResourceTemplatesRequestSchema,
+  ReadResourceRequestSchema,
   ErrorCode,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 import { toolDefinitions, handleToolCall } from './tools/index.js';
+import { promptDefinitions, handleGetPrompt } from './prompts.js';
+import {
+  handleReadResource,
+  resourceDefinitions,
+  resourceTemplateDefinitions,
+} from './resources.js';
 import { getDatabase, closeDatabase } from './infrastructure/database.js';
 import { getGTFSLoader } from './infrastructure/gtfs-loader.js';
 import { shutdownCache } from './infrastructure/cache.js';
@@ -27,6 +38,8 @@ export class MetroNorthMCPServer {
       {
         capabilities: {
           tools: {},
+          resources: {},
+          prompts: {},
         },
       }
     );
@@ -41,6 +54,32 @@ export class MetroNorthMCPServer {
       return {
         tools: toolDefinitions,
       };
+    });
+
+    this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
+      return {
+        resources: resourceDefinitions,
+      };
+    });
+
+    this.server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => {
+      return {
+        resourceTemplates: resourceTemplateDefinitions,
+      };
+    });
+
+    this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+      return handleReadResource(request.params.uri);
+    });
+
+    this.server.setRequestHandler(ListPromptsRequestSchema, async () => {
+      return {
+        prompts: promptDefinitions,
+      };
+    });
+
+    this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+      return handleGetPrompt(request.params.name, request.params.arguments || {});
     });
 
     // Handle tool calls

@@ -108,18 +108,15 @@ describe('Tool Handlers', () => {
       const status = JSON.parse(text);
 
       expect(status.status).toBe('operational');
+      expect(result.structuredContent?.status).toBe('operational');
       expect(status.server).toBeDefined();
       expect(status.server.version).toBe('2.0.0');
     });
   });
 
   describe('unknown tool', () => {
-    it('should return error for unknown tool', async () => {
-      const result = await handleToolCall('unknown_tool', {});
-      const text = result.content[0].text;
-
-      expect(text).toContain('Error');
-      expect(text).toContain('unknown_tool');
+    it('should throw for unknown tool so the server can return a protocol error', async () => {
+      await expect(handleToolCall('unknown_tool', {})).rejects.toThrow('unknown_tool');
     });
   });
 });
@@ -132,8 +129,12 @@ describe('Input Validation', () => {
     });
 
     const text = result.content[0].text;
-    // Should either error or use default value
-    expect(result.content).toBeDefined();
+    expect(text).toContain('Error');
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent?.error).toMatchObject({
+      code: 'invalid_arguments',
+      tool: 'get_departures',
+    });
   });
 
   it('should validate limit range', async () => {

@@ -4,6 +4,12 @@ import { getStationService } from './station-service.js';
 import { createModuleLogger } from '../logger.js';
 import { ROUTE_NAMES } from '../config.js';
 import type { DepartureInfo, TripDetails, TripStop } from '../domain/gtfs.js';
+import {
+  addMinutesToGtfsTime,
+  compactServiceDate,
+  formatGtfsTimeForDisplay,
+  getMetroNorthServiceContext,
+} from '../domain/transit-time.js';
 
 const logger = createModuleLogger('schedule-service');
 
@@ -32,13 +38,15 @@ export class ScheduleService {
   /**
    * Get active service IDs for a given date
    */
-  getActiveServiceIds(date: Date = new Date()): string[] {
+  getActiveServiceIds(date: Date | string = new Date()): string[] {
     const sqlite = getSqlite();
-    const dayOfWeek = date.getDay();
+    const serviceDate =
+      typeof date === 'string' ? date : getMetroNorthServiceContext(date).serviceDate;
+    const dayOfWeek = new Date(`${serviceDate}T12:00:00Z`).getUTCDay();
     const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
     const dayColumn = dayNames[dayOfWeek];
 
-    const dateStr = date.toISOString().slice(0, 10).replace(/-/g, '');
+    const dateStr = compactServiceDate(serviceDate);
 
     // Get services from calendar that are active today
     const calendarServices = sqlite
@@ -91,9 +99,8 @@ export class ScheduleService {
     }
 
     const sqlite = getSqlite();
-    const now = new Date();
-    const currentTime = now.toTimeString().slice(0, 8);
-    const serviceIds = this.getActiveServiceIds(now);
+    const now = getMetroNorthServiceContext();
+    const serviceIds = this.getActiveServiceIds(now.serviceDate);
 
     if (serviceIds.length === 0) {
       logger.warn('No active services found for today');
@@ -131,7 +138,7 @@ export class ScheduleService {
       LIMIT ?
     `;
 
-    const params = [station.stop_id, ...serviceIds, currentTime, limit * 2];
+    const params = [station.stop_id, ...serviceIds, now.queryTime, limit * 2];
     const rows = sqlite.prepare(query).all(...params) as ScheduleRow[];
 
     // Get realtime delays if available
@@ -161,19 +168,14 @@ export class ScheduleService {
       const stops = await this.getTripStopNames(row.trip_id, row.stop_sequence);
 
       // Calculate actual departure time
-      let actualDeparture: string | null = null;
-      if (delayMinutes !== null) {
-        const [hours, mins] = row.departure_time.split(':').map(Number);
-        const depDate = new Date();
-        depDate.setHours(hours, mins + delayMinutes, 0, 0);
-        actualDeparture = depDate.toTimeString().slice(0, 5);
-      }
+      const actualDeparture =
+        delayMinutes !== null ? addMinutesToGtfsTime(row.departure_time, delayMinutes) : null;
 
       departures.push({
         trip_id: row.trip_id,
         route_name: ROUTE_NAMES[row.route_id] || row.route_long_name,
         destination: row.trip_headsign || 'Unknown',
-        scheduled_departure: row.departure_time.slice(0, 5),
+        scheduled_departure: formatGtfsTimeForDisplay(row.departure_time),
         actual_departure: actualDeparture,
         delay_minutes: delayMinutes,
         platform: null,
@@ -287,8 +289,8 @@ export class ScheduleService {
       stops.push({
         stop_name: row.stop_name,
         stop_id: row.stop_id,
-        arrival_time: row.arrival_time.slice(0, 5),
-        departure_time: row.departure_time.slice(0, 5),
+        arrival_time: formatGtfsTimeForDisplay(row.arrival_time),
+        departure_time: formatGtfsTimeForDisplay(row.departure_time),
         stop_sequence: row.stop_sequence,
         delay_minutes: delayMinutes,
       });
@@ -322,7 +324,7 @@ export class ScheduleService {
    */
   async getRouteSchedule(
     routeName: string,
-    date: Date = new Date(),
+    date: string = getMetroNorthServiceContext().serviceDate,
     direction: 'inbound' | 'outbound' | 'all' = 'all'
   ): Promise<DepartureInfo[]> {
     const sqlite = getSqlite();
@@ -379,7 +381,7 @@ export class ScheduleService {
       trip_id: row.trip_id,
       route_name: ROUTE_NAMES[row.route_id] || row.route_long_name,
       destination: row.trip_headsign || 'Unknown',
-      scheduled_departure: row.departure_time.slice(0, 5),
+      scheduled_departure: formatGtfsTimeForDisplay(row.departure_time),
       actual_departure: null,
       delay_minutes: null,
       platform: null,
