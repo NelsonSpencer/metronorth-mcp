@@ -1,6 +1,7 @@
 # Metro-North MCP Server
 
 [![CI](https://github.com/NelsonSpencer/metronorth-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/NelsonSpencer/metronorth-mcp/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/metronorth-mcp)](https://www.npmjs.com/package/metronorth-mcp)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Node.js 20+](https://img.shields.io/badge/node-%3E%3D20-339933.svg)
 
@@ -18,19 +19,13 @@ Use command "npx" with args ["-y", "metronorth-mcp"].
 After installing, reload MCP servers and test it by calling search_stations with query "Grand Central".
 ```
 
-Until the npm package is published, use the GitHub fallback command:
-
-```text
-Use command "npx" with args ["-y", "--package", "github:NelsonSpencer/metronorth-mcp", "metronorth-mcp"].
-```
-
 ## Install
 
 ```bash
 npx -y metronorth-mcp
 ```
 
-GitHub fallback:
+GitHub install:
 
 ```bash
 npx -y --package github:NelsonSpencer/metronorth-mcp metronorth-mcp
