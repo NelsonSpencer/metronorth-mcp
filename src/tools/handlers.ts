@@ -12,6 +12,7 @@ import {
 } from '../domain/gtfs.js';
 import { getMetroNorthServiceContext } from '../domain/transit-time.js';
 import { ROUTE_IDS_BY_NAME } from '../config.js';
+import { getSystemStatus } from '../system-status.js';
 import type { ToolContext } from './context.js';
 import { ToolDomainError } from './errors.js';
 import { parseArgs } from './validation.js';
@@ -200,28 +201,11 @@ async function handleGetStationInfo(args: Record<string, unknown>, context: Tool
 }
 
 async function handleGetSystemStatus(_args: Record<string, unknown>, context: ToolContext) {
-  const gtfsLastUpdate = context.getMetadata('gtfs_last_update');
-  const stopsCount = context.getMetadata('gtfs_stops_count');
-  const tripsCount = context.getMetadata('gtfs_trips_count');
-  const needsUpdate = await context.gtfsLoader.needsUpdate();
-
-  return {
-    status: 'operational',
-    gtfs_data: {
-      last_update: gtfsLastUpdate || 'never',
-      needs_update: needsUpdate,
-      stops: stopsCount ? parseInt(stopsCount) : 0,
-      trips: tripsCount ? parseInt(tripsCount) : 0,
-    },
-    realtime: {
-      available: context.realtimeClient.isAvailable(),
-      note: 'Real-time data enabled (public MTA API)',
-    },
-    server: {
-      version: '2.0.0',
-      uptime: process.uptime(),
-    },
-  };
+  return getSystemStatus({
+    getMetadata: context.getMetadata,
+    gtfsLoader: context.gtfsLoader,
+    realtimeClient: context.realtimeClient,
+  });
 }
 
 function formatStationPairTrip(trip: StationPairTrip) {

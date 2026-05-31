@@ -6,9 +6,7 @@ import type {
 } from '@modelcontextprotocol/sdk/types.js';
 import { ROUTE_NAMES } from './config.js';
 import { getStationService } from './infrastructure/station-service.js';
-import { getMetadata } from './infrastructure/database.js';
-import { getGTFSLoader } from './infrastructure/gtfs-loader.js';
-import { getRealtimeClient } from './infrastructure/realtime-client.js';
+import { getSystemStatus } from './system-status.js';
 
 const JSON_MIME_TYPE = 'application/json';
 const MARKDOWN_MIME_TYPE = 'text/markdown';
@@ -72,7 +70,7 @@ export async function handleReadResource(uri: string): Promise<ReadResourceResul
   }
 
   if (uri === 'metronorth://system/status') {
-    return jsonResource(uri, await getSystemStatusResource());
+    return jsonResource(uri, await getSystemStatus());
   }
 
   if (uri === 'metronorth://routes') {
@@ -184,28 +182,6 @@ function getExamplesResource(): string {
     '',
     'If a station-specific tool returns a structured error, search stations and retry with the closest matching station name.',
   ].join('\n');
-}
-
-async function getSystemStatusResource() {
-  const loader = getGTFSLoader();
-  const realtimeClient = getRealtimeClient();
-  const gtfsLastUpdate = getMetadata('gtfs_last_update');
-  const stopsCount = getMetadata('gtfs_stops_count');
-  const tripsCount = getMetadata('gtfs_trips_count');
-
-  return {
-    status: 'operational',
-    gtfs_data: {
-      last_update: gtfsLastUpdate || 'never',
-      needs_update: await loader.needsUpdate(),
-      stops: stopsCount ? parseInt(stopsCount) : 0,
-      trips: tripsCount ? parseInt(tripsCount) : 0,
-    },
-    realtime: {
-      available: realtimeClient.isAvailable(),
-      note: 'Real-time data enabled (public MTA API)',
-    },
-  };
 }
 
 function getRoutesResource() {

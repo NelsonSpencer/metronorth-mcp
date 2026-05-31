@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { handleToolCall, toolDefinitions } from '../src/tools/index.js';
+import { packageMetadata } from '../src/package-metadata.js';
 
 // Mock the database and services for testing
 vi.mock('../src/infrastructure/database.js', () => ({
@@ -126,6 +127,7 @@ describe('Tool Result Contract', () => {
         code: 'invalid_arguments',
         message: error.message,
         tool: 'get_departures',
+        request_id: expect.any(String),
       },
     });
     expect(result.content).toEqual([
@@ -184,7 +186,11 @@ describe('Tool Handlers', () => {
       expect(status.status).toBe('operational');
       expect(result.structuredContent?.status).toBe('operational');
       expect(status.server).toBeDefined();
-      expect(status.server.version).toBe('2.0.0');
+      expect(status.server.version).toBe(packageMetadata.version);
+      expect(result.structuredContent?.server).toMatchObject({
+        name: packageMetadata.name,
+        version: packageMetadata.version,
+      });
     });
   });
 
@@ -197,10 +203,14 @@ describe('Tool Handlers', () => {
 
 describe('Input Validation', () => {
   it('should validate direction enum', async () => {
-    const result = await handleToolCall('get_departures', {
-      station_name: 'Grand Central',
-      direction: 'invalid_direction',
-    });
+    const result = await handleToolCall(
+      'get_departures',
+      {
+        station_name: 'Grand Central',
+        direction: 'invalid_direction',
+      },
+      { requestId: 'validation-test' }
+    );
 
     const text = result.content[0].text;
     expect(text).toContain('Error');
@@ -208,6 +218,7 @@ describe('Input Validation', () => {
     expect(result.structuredContent?.error).toMatchObject({
       code: 'invalid_arguments',
       tool: 'get_departures',
+      request_id: 'validation-test',
     });
   });
 

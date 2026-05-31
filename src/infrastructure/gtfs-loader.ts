@@ -5,6 +5,7 @@ import { Readable } from 'node:stream';
 import { config, GTFS_STATIC_URL } from '../config.js';
 import { createModuleLogger } from '../logger.js';
 import { getSqlite, transaction, setMetadata, getMetadata } from './database.js';
+import { packageMetadata } from '../package-metadata.js';
 import type {
   Stop,
   Route,
@@ -57,7 +58,7 @@ export class GTFSLoader {
       responseType: 'arraybuffer',
       timeout: 60000,
       headers: {
-        'User-Agent': 'MetroNorth-MCP/2.0.0',
+        'User-Agent': packageMetadata.userAgent,
       },
     });
 

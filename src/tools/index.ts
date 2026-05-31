@@ -1,5 +1,5 @@
 export { toolDefinitions } from './definitions.js';
-export { handleToolCall } from './dispatch.js';
+export { createRequestContext, handleToolCall } from './dispatch.js';
 export {
   createDefaultToolContext,
   createToolContext,
@@ -10,3 +10,4 @@ export {
   type ToolContext,
   type ToolContextOverrides,
 } from './context.js';
+export type { ToolCallOptions, ToolRequestContext } from './dispatch.js';

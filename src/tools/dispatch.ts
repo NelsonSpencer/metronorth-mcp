@@ -1,4 +1,5 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { randomUUID } from 'node:crypto';
 import { createModuleLogger, logRequest } from '../logger.js';
 import { createToolContext, type ToolContextOverrides } from './context.js';
 import { UnknownToolError } from './errors.js';
@@ -7,13 +8,33 @@ import { getToolErrorMessage, toToolErrorResult, toToolResult } from './results.
 
 const logger = createModuleLogger('tools');
 
+export interface ToolRequestContext {
+  requestId: string;
+}
+
+export type ToolCallOptions = ToolContextOverrides & Partial<ToolRequestContext>;
+
+export function createRequestContext(): ToolRequestContext {
+  return {
+    requestId: randomUUID(),
+  };
+}
+
 export async function handleToolCall(
   name: string,
   args: Record<string, unknown>,
-  contextOverrides: ToolContextOverrides = {}
+  options: ToolCallOptions = {}
 ): Promise<CallToolResult> {
   const start = Date.now();
   let success = true;
+  const requestId = options.requestId ?? createRequestContext().requestId;
+  const contextOverrides: ToolContextOverrides = {
+    scheduleService: options.scheduleService,
+    stationService: options.stationService,
+    realtimeClient: options.realtimeClient,
+    gtfsLoader: options.gtfsLoader,
+    getMetadata: options.getMetadata,
+  };
 
   try {
     const handler = toolHandlers[name];
@@ -31,10 +52,13 @@ export async function handleToolCall(
 
     success = false;
     const errorMessage = getToolErrorMessage(error);
-    logger.error({ tool: name, error: errorMessage }, 'Tool execution failed');
+    logger.error(
+      { tool: name, request_id: requestId, error: errorMessage },
+      'Tool execution failed'
+    );
 
-    return toToolErrorResult(name, error);
+    return toToolErrorResult(name, error, requestId);
   } finally {
-    logRequest(name, args, Date.now() - start, success);
+    logRequest(name, args, Date.now() - start, success, requestId);
   }
 }

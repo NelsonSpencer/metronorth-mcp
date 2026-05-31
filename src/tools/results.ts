@@ -25,7 +25,11 @@ export function getToolErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function toToolErrorResult(name: string, error: unknown): CallToolResult {
+export function toToolErrorResult(
+  name: string,
+  error: unknown,
+  requestId?: string
+): CallToolResult {
   const errorMessage = getToolErrorMessage(error);
   const errorCode = error instanceof ToolDomainError ? error.code : 'tool_error';
 
@@ -41,6 +45,7 @@ export function toToolErrorResult(name: string, error: unknown): CallToolResult 
         code: errorCode,
         message: errorMessage,
         tool: name,
+        ...(requestId ? { request_id: requestId } : {}),
         ...(error instanceof ToolDomainError && error.details ? error.details : {}),
       },
     },

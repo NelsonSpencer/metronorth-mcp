@@ -4,6 +4,7 @@ import { GTFS_REALTIME_URL, GTFS_ALERTS_URL, ROUTE_NAMES } from '../config.js';
 import { createModuleLogger } from '../logger.js';
 import { getSqlite, transaction } from './database.js';
 import { getCache, CACHE_KEYS } from './cache.js';
+import { packageMetadata } from '../package-metadata.js';
 import type { TripUpdate, ServiceAlert } from '../domain/gtfs.js';
 
 const { transit_realtime } = GtfsRealtimeBindings;
@@ -121,7 +122,7 @@ export class MetroNorthRealtime {
         timeout: 15000,
         responseType: 'arraybuffer',
         headers: {
-          'User-Agent': 'MetroNorth-MCP/2.0.0',
+          'User-Agent': packageMetadata.userAgent,
         },
       });
 
@@ -214,7 +215,7 @@ export class MetroNorthRealtime {
         timeout: 15000,
         responseType: 'arraybuffer',
         headers: {
-          'User-Agent': 'MetroNorth-MCP/2.0.0',
+          'User-Agent': packageMetadata.userAgent,
         },
       });
 
