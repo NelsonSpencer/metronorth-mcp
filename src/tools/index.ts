@@ -1,4 +1,5 @@
 import { fromError } from 'zod-validation-error';
+import { randomUUID } from 'node:crypto';
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { z } from 'zod';
 import {
@@ -17,11 +18,10 @@ import {
 import { getScheduleService } from '../infrastructure/schedule-service.js';
 import { getStationService } from '../infrastructure/station-service.js';
 import { getRealtimeClient } from '../infrastructure/realtime-client.js';
-import { getGTFSLoader } from '../infrastructure/gtfs-loader.js';
-import { getMetadata } from '../infrastructure/database.js';
 import { createModuleLogger, logRequest } from '../logger.js';
 import { ROUTE_IDS_BY_NAME } from '../config.js';
 import { getMetroNorthServiceContext } from '../domain/transit-time.js';
+import { getSystemStatus } from '../system-status.js';
 
 const logger = createModuleLogger('tools');
 
@@ -111,6 +111,16 @@ class ToolDomainError extends Error {
   }
 }
 
+export interface ToolRequestContext {
+  requestId: string;
+}
+
+export function createRequestContext(): ToolRequestContext {
+  return {
+    requestId: randomUUID(),
+  };
+}
+
 function parseArgs<T extends z.ZodTypeAny>(schema: T, args: Record<string, unknown>): z.infer<T> {
   const parsed = schema.safeParse(args);
   if (!parsed.success) {
@@ -143,10 +153,12 @@ function toToolResult(result: unknown): CallToolResult {
 // Tool handlers
 export async function handleToolCall(
   name: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  context: ToolRequestContext = createRequestContext()
 ): Promise<CallToolResult> {
   const start = Date.now();
   let success = true;
+  const { requestId } = context;
 
   try {
     let result: unknown;
@@ -171,7 +183,7 @@ export async function handleToolCall(
         result = await handleGetStationInfo(args);
         break;
       case 'get_system_status':
-        result = await handleGetSystemStatus();
+        result = await getSystemStatus();
         break;
       case 'get_station_pair_schedule':
         result = await handleGetStationPairSchedule(args);
@@ -196,7 +208,10 @@ export async function handleToolCall(
     success = false;
     const errorMessage = error instanceof Error ? error.message : String(error);
     const errorCode = error instanceof ToolDomainError ? error.code : 'tool_error';
-    logger.error({ tool: name, error: errorMessage }, 'Tool execution failed');
+    logger.error(
+      { tool: name, request_id: requestId, error: errorMessage },
+      'Tool execution failed'
+    );
 
     return {
       content: [
@@ -211,12 +226,13 @@ export async function handleToolCall(
           message: errorMessage,
           tool: name,
           ...(error instanceof ToolDomainError && error.details ? error.details : {}),
+          request_id: requestId,
         },
       },
       isError: true,
     };
   } finally {
-    logRequest(name, args, Date.now() - start, success);
+    logRequest(name, args, Date.now() - start, success, requestId);
   }
 }
 
@@ -399,34 +415,6 @@ async function handleGetStationInfo(args: Record<string, unknown>) {
   };
 }
 
-async function handleGetSystemStatus() {
-  const gtfsLastUpdate = getMetadata('gtfs_last_update');
-  const stopsCount = getMetadata('gtfs_stops_count');
-  const tripsCount = getMetadata('gtfs_trips_count');
-  const realtimeClient = getRealtimeClient();
-
-  const loader = getGTFSLoader();
-  const needsUpdate = await loader.needsUpdate();
-
-  return {
-    status: 'operational',
-    gtfs_data: {
-      last_update: gtfsLastUpdate || 'never',
-      needs_update: needsUpdate,
-      stops: stopsCount ? parseInt(stopsCount) : 0,
-      trips: tripsCount ? parseInt(tripsCount) : 0,
-    },
-    realtime: {
-      available: realtimeClient.isAvailable(),
-      note: 'Real-time data enabled (public MTA API)',
-    },
-    server: {
-      version: '2.0.0',
-      uptime: process.uptime(),
-    },
-  };
-}
-
 function formatStationPairTrip(trip: StationPairTrip) {
   return {
     trip_id: trip.trip_id,
@@ -547,7 +535,7 @@ async function handlePlanMetroNorthTrip(args: Record<string, unknown>) {
     );
   }
 
-  const status = await handleGetSystemStatus();
+  const status = await getSystemStatus();
   const alerts = include_alerts ? await getRelevantTripAlerts(options, origin_station, destination_station) : [];
 
   return {

@@ -1,5 +1,6 @@
 import pino from 'pino';
 import { config } from './config.js';
+import { packageMetadata } from './package-metadata.js';
 
 // MCP uses stdout for JSON-RPC, so logs must go to stderr
 export const logger = pino({
@@ -20,8 +21,8 @@ export const logger = pino({
           options: { destination: 2 }, // stderr
         },
   base: {
-    service: 'metronorth-mcp',
-    version: '2.0.0',
+    service: packageMetadata.name,
+    version: packageMetadata.version,
   },
   formatters: {
     level: (label) => ({ level: label }),
@@ -37,10 +38,12 @@ export const logRequest = (
   tool: string,
   params: Record<string, unknown>,
   duration: number,
-  success: boolean
+  success: boolean,
+  requestId?: string
 ) => {
   logger.info({
     type: 'tool_request',
+    request_id: requestId,
     tool,
     params,
     duration_ms: duration,
