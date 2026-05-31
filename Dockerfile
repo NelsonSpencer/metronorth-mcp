@@ -32,10 +32,6 @@ ENV NODE_ENV=production
 ENV LOG_LEVEL=info
 ENV DB_PATH=/app/db/metronorth.db
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD node -e "console.log('healthy')" || exit 1
-
 # Run as non-root user
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001 -G nodejs && \

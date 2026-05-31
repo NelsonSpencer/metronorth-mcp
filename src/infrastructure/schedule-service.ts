@@ -175,7 +175,7 @@ export class ScheduleService {
         destination: row.trip_headsign || 'Unknown',
         scheduled_departure: row.departure_time.slice(0, 5),
         actual_departure: actualDeparture,
-        delay_minutes: delayMinutes !== null ? Math.round(delayMinutes / 60) : null,
+        delay_minutes: delayMinutes,
         platform: null,
         status,
         stops,

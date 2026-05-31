@@ -7,8 +7,6 @@ const envSchema = z.object({
   REDIS_URL: z.string().url().optional(),
   DB_PATH: z.string().default('./db/metronorth.db'),
   GTFS_UPDATE_INTERVAL_HOURS: z.coerce.number().default(24),
-  REALTIME_POLL_INTERVAL_MS: z.coerce.number().default(30000),
-  HTTP_PORT: z.coerce.number().default(6767),
   CACHE_TTL_SECONDS: z.coerce.number().default(300),
 });
 

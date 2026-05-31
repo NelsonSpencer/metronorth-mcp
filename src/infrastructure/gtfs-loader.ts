@@ -2,7 +2,7 @@ import axios from 'axios';
 import AdmZip from 'adm-zip';
 import csv from 'csv-parser';
 import { Readable } from 'stream';
-import { GTFS_STATIC_URL } from '../config.js';
+import { config, GTFS_STATIC_URL } from '../config.js';
 import { createModuleLogger } from '../logger.js';
 import { getSqlite, transaction, setMetadata, getMetadata } from './database.js';
 import type {
@@ -51,8 +51,7 @@ export class GTFSLoader {
     const now = Date.now();
     const hoursSinceUpdate = (now - lastUpdateTime) / (1000 * 60 * 60);
 
-    // Update if more than 24 hours old
-    return hoursSinceUpdate > 24;
+    return hoursSinceUpdate > config.GTFS_UPDATE_INTERVAL_HOURS;
   }
 
   async downloadGTFS(): Promise<Buffer> {
