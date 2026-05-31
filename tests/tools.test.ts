@@ -45,6 +45,9 @@ describe('Tool Definitions', () => {
     expect(toolNames).toContain('search_stations');
     expect(toolNames).toContain('get_station_info');
     expect(toolNames).toContain('get_system_status');
+    expect(toolNames).toContain('get_station_pair_schedule');
+    expect(toolNames).toContain('get_first_last_trains');
+    expect(toolNames).toContain('plan_metro_north_trip');
   });
 
   it('should have valid input schemas', () => {

@@ -41,6 +41,11 @@ async function main() {
       'tools/list did not include get_system_status'
     );
     assertIncludes(
+      tools.tools.map((tool) => tool.name),
+      'plan_metro_north_trip',
+      'tools/list did not include plan_metro_north_trip'
+    );
+    assertIncludes(
       resources.resources.map((resource) => resource.uri),
       'metronorth://system/status',
       'resources/list did not include system status'
@@ -75,6 +80,24 @@ async function main() {
     );
     if (!status.structuredContent || status.isError) {
       throw new Error('get_system_status did not return structured successful content');
+    }
+
+    const tripPlan = await client.callTool(
+      {
+        name: 'plan_metro_north_trip',
+        arguments: {
+          origin_station: 'Grand Central',
+          destination_station: 'White Plains',
+          depart_after: '00:00',
+          limit: 2,
+          include_realtime: false,
+          include_alerts: false,
+        },
+      },
+      CallToolResultSchema
+    );
+    if (!tripPlan.structuredContent || tripPlan.isError) {
+      throw new Error('plan_metro_north_trip did not return structured successful content');
     }
 
     const systemResource = await client.readResource({

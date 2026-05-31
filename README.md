@@ -131,10 +131,11 @@ This server exposes usage guidance through MCP:
 Recommended flow:
 
 1. Search stations first when names may be partial or ambiguous.
-2. Use `get_departures` for near-term train options.
-3. Use `get_service_alerts` for route or station disruptions.
-4. Read `metronorth://system/status` when data freshness matters.
-5. Treat realtime departures and alerts as best-effort public feed data.
+2. Use `plan_metro_north_trip` for station-to-station questions.
+3. Use `get_station_pair_schedule` for direct train options between two stations.
+4. Use `get_first_last_trains` for first/last train questions.
+5. Read `metronorth://system/status` when data freshness matters.
+6. Treat realtime departures and alerts as best-effort public feed data.
 
 ## Tools
 
@@ -149,15 +150,18 @@ Tool results include readable text and MCP `structuredContent`. Invalid inputs a
 | `get_service_alerts` | Get current service alerts |
 | `get_station_info` | Get station metadata and served routes |
 | `get_system_status` | Check feed availability and local data freshness |
+| `get_station_pair_schedule` | Find direct trains between two stations |
+| `get_first_last_trains` | Get first and last direct trains for a service date |
+| `plan_metro_north_trip` | Plan a direct trip with options, alerts, and freshness |
 
 Example:
 
 ```json
 {
-  "station_name": "Grand Central",
-  "direction": "outbound",
-  "limit": 5,
-  "include_realtime": true
+  "origin_station": "Grand Central",
+  "destination_station": "White Plains",
+  "limit": 3,
+  "include_alerts": true
 }
 ```
 

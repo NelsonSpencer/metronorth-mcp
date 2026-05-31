@@ -3,12 +3,13 @@ import { getRealtimeClient } from './realtime-client.js';
 import { getStationService } from './station-service.js';
 import { createModuleLogger } from '../logger.js';
 import { ROUTE_NAMES } from '../config.js';
-import type { DepartureInfo, TripDetails, TripStop } from '../domain/gtfs.js';
+import type { DepartureInfo, FirstLastTrains, StationPairTrip, TripDetails, TripStop } from '../domain/gtfs.js';
 import {
   addMinutesToGtfsTime,
   compactServiceDate,
   formatGtfsTimeForDisplay,
   getMetroNorthServiceContext,
+  parseGtfsTime,
 } from '../domain/transit-time.js';
 
 const logger = createModuleLogger('schedule-service');
@@ -32,6 +33,45 @@ interface TripStopRow {
   arrival_time: string;
   departure_time: string;
   stop_sequence: number;
+}
+
+interface StationPairRow {
+  trip_id: string;
+  trip_short_name: string | null;
+  route_id: string;
+  route_long_name: string;
+  trip_headsign: string | null;
+  direction_id: number | null;
+  origin_stop_id: string;
+  origin_stop_name: string;
+  destination_stop_id: string;
+  destination_stop_name: string;
+  origin_departure_time: string;
+  destination_arrival_time: string;
+  origin_sequence: number;
+  destination_sequence: number;
+  service_id: string;
+}
+
+type StationPairScheduleOptions = {
+  date?: string;
+  departAfter?: string;
+  limit?: number;
+  includeRealtime?: boolean;
+};
+
+function normalizeGtfsTimeInput(value: string): string {
+  const parts = value.split(':');
+  return parts.length === 2 ? `${value}:00` : value;
+}
+
+function getDefaultDepartAfter(date: string | undefined): string {
+  const now = getMetroNorthServiceContext();
+  if (!date || date === now.serviceDate) {
+    return now.queryTime;
+  }
+
+  return '00:00:00';
 }
 
 export class ScheduleService {
@@ -388,6 +428,162 @@ export class ScheduleService {
       status: 'unknown' as const,
       stops: [],
     }));
+  }
+
+  async getStationPairSchedule(
+    originStationName: string,
+    destinationStationName: string,
+    options: StationPairScheduleOptions = {}
+  ): Promise<StationPairTrip[]> {
+    const stationService = getStationService();
+    const [originStation, destinationStation] = await Promise.all([
+      stationService.findStationByName(originStationName),
+      stationService.findStationByName(destinationStationName),
+    ]);
+
+    if (!originStation || !destinationStation) {
+      logger.warn({ originStationName, destinationStationName }, 'Station pair not found');
+      return [];
+    }
+
+    const sqlite = getSqlite();
+    const serviceDate = options.date || getMetroNorthServiceContext().serviceDate;
+    const serviceIds = this.getActiveServiceIds(serviceDate);
+    if (serviceIds.length === 0) return [];
+
+    const departAfter = normalizeGtfsTimeInput(
+      options.departAfter || getDefaultDepartAfter(options.date)
+    );
+    const limit = options.limit || 5;
+
+    const query = `
+      SELECT
+        t.trip_id,
+        t.trip_short_name,
+        t.route_id,
+        r.route_long_name,
+        t.trip_headsign,
+        t.direction_id,
+        origin_st.stop_id AS origin_stop_id,
+        origin_stop.stop_name AS origin_stop_name,
+        destination_st.stop_id AS destination_stop_id,
+        destination_stop.stop_name AS destination_stop_name,
+        origin_st.departure_time AS origin_departure_time,
+        destination_st.arrival_time AS destination_arrival_time,
+        origin_st.stop_sequence AS origin_sequence,
+        destination_st.stop_sequence AS destination_sequence,
+        t.service_id
+      FROM trips t
+      JOIN routes r ON r.route_id = t.route_id
+      JOIN stop_times origin_st ON origin_st.trip_id = t.trip_id
+      JOIN stop_times destination_st ON destination_st.trip_id = t.trip_id
+      JOIN stops origin_stop ON origin_stop.stop_id = origin_st.stop_id
+      JOIN stops destination_stop ON destination_stop.stop_id = destination_st.stop_id
+      WHERE origin_st.stop_id = ?
+        AND destination_st.stop_id = ?
+        AND destination_st.stop_sequence > origin_st.stop_sequence
+        AND t.service_id IN (${serviceIds.map(() => '?').join(',')})
+        AND origin_st.departure_time >= ?
+      ORDER BY origin_st.departure_time
+      LIMIT ?
+    `;
+
+    const rows = sqlite
+      .prepare(query)
+      .all(originStation.stop_id, destinationStation.stop_id, ...serviceIds, departAfter, limit) as StationPairRow[];
+
+    return this.mapStationPairRows(rows, options.includeRealtime ?? true);
+  }
+
+  async getFirstLastTrains(
+    originStationName: string,
+    destinationStationName: string,
+    date?: string,
+    includeRealtime: boolean = true
+  ): Promise<FirstLastTrains> {
+    const serviceDate = date || getMetroNorthServiceContext().serviceDate;
+    const trips = await this.getStationPairSchedule(originStationName, destinationStationName, {
+      date: serviceDate,
+      departAfter: '00:00:00',
+      limit: 1000,
+      includeRealtime,
+    });
+
+    return {
+      service_date: serviceDate,
+      origin_station: originStationName,
+      destination_station: destinationStationName,
+      first_train: trips[0] || null,
+      last_train: trips[trips.length - 1] || null,
+      total_direct_trips: trips.length,
+    };
+  }
+
+  private async mapStationPairRows(
+    rows: StationPairRow[],
+    includeRealtime: boolean
+  ): Promise<StationPairTrip[]> {
+    const realtimeClient = getRealtimeClient();
+    const trips: StationPairTrip[] = [];
+
+    for (const row of rows) {
+      let originDelayMinutes: number | null = null;
+      let destinationDelayMinutes: number | null = null;
+      let status: StationPairTrip['status'] = 'unknown';
+
+      if (includeRealtime && realtimeClient.isAvailable()) {
+        const originRealtime = await realtimeClient.getRealtimeInfoForTripAtStop(
+          row.trip_id,
+          row.origin_stop_id,
+          row.origin_departure_time,
+          row.trip_short_name || undefined
+        );
+        const destinationRealtime = await realtimeClient.getRealtimeInfoForTripAtStop(
+          row.trip_id,
+          row.destination_stop_id,
+          row.destination_arrival_time,
+          row.trip_short_name || undefined
+        );
+
+        if (originRealtime.delaySeconds !== null) {
+          originDelayMinutes = Math.round(originRealtime.delaySeconds / 60);
+        }
+        if (destinationRealtime.delaySeconds !== null) {
+          destinationDelayMinutes = Math.round(destinationRealtime.delaySeconds / 60);
+        }
+        status = originRealtime.status as StationPairTrip['status'];
+      }
+
+      const durationMinutes = Math.round(
+        (parseGtfsTime(row.destination_arrival_time) - parseGtfsTime(row.origin_departure_time)) /
+          60
+      );
+
+      trips.push({
+        trip_id: row.trip_id,
+        route_name: ROUTE_NAMES[row.route_id] || row.route_long_name,
+        destination: row.trip_headsign || row.destination_stop_name,
+        direction: row.direction_id === 1 ? 'inbound' : 'outbound',
+        origin_station: row.origin_stop_name,
+        destination_station: row.destination_stop_name,
+        scheduled_origin_departure: formatGtfsTimeForDisplay(row.origin_departure_time),
+        actual_origin_departure:
+          originDelayMinutes !== null
+            ? addMinutesToGtfsTime(row.origin_departure_time, originDelayMinutes)
+            : null,
+        scheduled_destination_arrival: formatGtfsTimeForDisplay(row.destination_arrival_time),
+        actual_destination_arrival:
+          destinationDelayMinutes !== null
+            ? addMinutesToGtfsTime(row.destination_arrival_time, destinationDelayMinutes)
+            : null,
+        duration_minutes: durationMinutes,
+        origin_delay_minutes: originDelayMinutes,
+        destination_delay_minutes: destinationDelayMinutes,
+        status,
+      });
+    }
+
+    return trips;
   }
 }
 

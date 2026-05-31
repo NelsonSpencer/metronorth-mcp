@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 const queryLog = vi.hoisted(() => ({
   queries: [] as string[],
+  params: [] as unknown[][],
 }));
 
 vi.mock('../src/infrastructure/database.js', () => {
@@ -17,6 +18,50 @@ vi.mock('../src/infrastructure/database.js', () => {
     if (query.includes('FROM calendar_dates')) {
       return {
         all: vi.fn(() => []),
+      };
+    }
+
+    if (query.includes('origin_st') && query.includes('destination_st')) {
+      return {
+        all: vi.fn((...params: unknown[]) => {
+          queryLog.params.push(params);
+          return [
+            {
+              trip_id: 'trip-pair-1',
+              trip_short_name: '456',
+              route_id: '2',
+              route_long_name: 'Harlem',
+              trip_headsign: 'Southeast',
+              direction_id: 0,
+              origin_stop_id: 'GCT',
+              origin_stop_name: 'Grand Central Terminal',
+              destination_stop_id: 'WP',
+              destination_stop_name: 'White Plains',
+              origin_departure_time: '24:40:00',
+              destination_arrival_time: '25:10:00',
+              origin_sequence: 1,
+              destination_sequence: 4,
+              service_id: 'weekday',
+            },
+            {
+              trip_id: 'trip-pair-2',
+              trip_short_name: '789',
+              route_id: '2',
+              route_long_name: 'Harlem',
+              trip_headsign: 'Southeast',
+              direction_id: 0,
+              origin_stop_id: 'GCT',
+              origin_stop_name: 'Grand Central Terminal',
+              destination_stop_id: 'WP',
+              destination_stop_name: 'White Plains',
+              origin_departure_time: '26:00:00',
+              destination_arrival_time: '26:35:00',
+              origin_sequence: 1,
+              destination_sequence: 4,
+              service_id: 'weekday',
+            },
+          ];
+        }),
       };
     }
 
@@ -59,11 +104,18 @@ vi.mock('../src/infrastructure/database.js', () => {
 
 vi.mock('../src/infrastructure/station-service.js', () => ({
   getStationService: vi.fn(() => ({
-    findStationByName: vi.fn(() =>
-      Promise.resolve({
-        stop_id: 'GCT',
-        stop_name: 'Grand Central Terminal',
-      })
+    findStationByName: vi.fn((stationName: string) =>
+      Promise.resolve(
+        stationName.toLowerCase().includes('white')
+          ? {
+              stop_id: 'WP',
+              stop_name: 'White Plains',
+            }
+          : {
+              stop_id: 'GCT',
+              stop_name: 'Grand Central Terminal',
+            }
+      )
     ),
   })),
 }));
@@ -104,5 +156,71 @@ describe('ScheduleService', () => {
       (query) => query.includes('FROM stop_times st') && query.includes('JOIN trips t')
     );
     expect(departureQuery).toContain('AND t.direction_id = 0');
+  });
+
+  it('returns direct station-pair trips where the destination follows the origin', async () => {
+    queryLog.queries = [];
+    const { ScheduleService } = await import('../src/infrastructure/schedule-service.js');
+    const service = new ScheduleService();
+
+    const trips = await service.getStationPairSchedule('Grand Central', 'White Plains', {
+      date: '2024-01-01',
+      departAfter: '24:00',
+      limit: 2,
+      includeRealtime: false,
+    });
+
+    const pairQuery = queryLog.queries.find((query) => query.includes('origin_st'));
+    expect(pairQuery).toContain('destination_st.stop_sequence > origin_st.stop_sequence');
+    expect(trips).toHaveLength(2);
+    expect(trips[0].origin_station).toBe('Grand Central Terminal');
+    expect(trips[0].destination_station).toBe('White Plains');
+  });
+
+  it('handles after-midnight GTFS times for station-pair trips', async () => {
+    const { ScheduleService } = await import('../src/infrastructure/schedule-service.js');
+    const service = new ScheduleService();
+
+    const trips = await service.getStationPairSchedule('Grand Central', 'White Plains', {
+      date: '2024-01-01',
+      departAfter: '24:00',
+      limit: 1,
+      includeRealtime: false,
+    });
+
+    expect(trips[0].scheduled_origin_departure).toBe('00:40');
+    expect(trips[0].scheduled_destination_arrival).toBe('01:10');
+    expect(trips[0].duration_minutes).toBe(30);
+  });
+
+  it('passes depart_after through to the station-pair query', async () => {
+    queryLog.params = [];
+    const { ScheduleService } = await import('../src/infrastructure/schedule-service.js');
+    const service = new ScheduleService();
+
+    await service.getStationPairSchedule('Grand Central', 'White Plains', {
+      date: '2024-01-01',
+      departAfter: '25:00',
+      limit: 1,
+      includeRealtime: false,
+    });
+
+    expect(queryLog.params.at(-1)).toContain('25:00:00');
+  });
+
+  it('returns first and last direct trains for a service date', async () => {
+    const { ScheduleService } = await import('../src/infrastructure/schedule-service.js');
+    const service = new ScheduleService();
+
+    const result = await service.getFirstLastTrains(
+      'Grand Central',
+      'White Plains',
+      '2024-01-01',
+      false
+    );
+
+    expect(result.first_train?.trip_id).toBe('trip-pair-1');
+    expect(result.last_train?.trip_id).toBe('trip-pair-2');
+    expect(result.total_direct_trips).toBe(2);
   });
 });

@@ -220,6 +220,68 @@ export const GetStationInfoSchema = z.object({
   station_name: z.string().min(2).describe('Station name to look up'),
 });
 
+const DateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .optional()
+  .describe('Date in YYYY-MM-DD format (defaults to the current Metro-North service date)');
+
+const GtfsTimeSchema = z
+  .string()
+  .regex(/^([0-2]?\d|3[0-5]):[0-5]\d(:[0-5]\d)?$/)
+  .optional()
+  .describe('Departure time in HH:mm or HH:mm:ss format; GTFS after-midnight times like 25:10 are supported');
+
+export const GetStationPairScheduleSchema = z.object({
+  origin_station: z.string().min(2).describe('Origin station name'),
+  destination_station: z.string().min(2).describe('Destination station name'),
+  date: DateSchema,
+  depart_after: GtfsTimeSchema,
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(25)
+    .default(5)
+    .describe('Maximum number of direct trips to return'),
+  include_realtime: z
+    .boolean()
+    .default(true)
+    .describe('Include real-time delay information if available'),
+});
+
+export const GetFirstLastTrainsSchema = z.object({
+  origin_station: z.string().min(2).describe('Origin station name'),
+  destination_station: z.string().min(2).describe('Destination station name'),
+  date: DateSchema,
+  include_realtime: z
+    .boolean()
+    .default(true)
+    .describe('Include real-time delay information if available'),
+});
+
+export const PlanMetroNorthTripSchema = z.object({
+  origin_station: z.string().min(2).describe('Origin station name'),
+  destination_station: z.string().min(2).describe('Destination station name'),
+  date: DateSchema,
+  depart_after: GtfsTimeSchema,
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(10)
+    .default(3)
+    .describe('Maximum number of trip options to include'),
+  include_realtime: z
+    .boolean()
+    .default(true)
+    .describe('Include real-time delay information if available'),
+  include_alerts: z
+    .boolean()
+    .default(true)
+    .describe('Include current service alerts for matching routes and stations'),
+});
+
 type JsonSchemaProperty = {
   type: string;
   description?: string;
@@ -339,6 +401,67 @@ export const ToolInputSchemas = {
     type: 'object',
     properties: {},
   },
+  get_station_pair_schedule: {
+    type: 'object',
+    properties: {
+      origin_station: stringProperty('Origin station name'),
+      destination_station: stringProperty('Destination station name'),
+      date: stringProperty('Date in YYYY-MM-DD format', {
+        pattern: '^\\d{4}-\\d{2}-\\d{2}$',
+      }),
+      depart_after: stringProperty('Departure time in HH:mm or HH:mm:ss format', {
+        pattern: '^([0-2]?\\d|3[0-5]):[0-5]\\d(:[0-5]\\d)?$',
+      }),
+      limit: numberProperty('Maximum number of direct trips to return (1-25)', {
+        default: 5,
+        minimum: 1,
+        maximum: 25,
+      }),
+      include_realtime: booleanProperty('Include real-time delay information if available', {
+        default: true,
+      }),
+    },
+    required: ['origin_station', 'destination_station'],
+  },
+  get_first_last_trains: {
+    type: 'object',
+    properties: {
+      origin_station: stringProperty('Origin station name'),
+      destination_station: stringProperty('Destination station name'),
+      date: stringProperty('Date in YYYY-MM-DD format', {
+        pattern: '^\\d{4}-\\d{2}-\\d{2}$',
+      }),
+      include_realtime: booleanProperty('Include real-time delay information if available', {
+        default: true,
+      }),
+    },
+    required: ['origin_station', 'destination_station'],
+  },
+  plan_metro_north_trip: {
+    type: 'object',
+    properties: {
+      origin_station: stringProperty('Origin station name'),
+      destination_station: stringProperty('Destination station name'),
+      date: stringProperty('Date in YYYY-MM-DD format', {
+        pattern: '^\\d{4}-\\d{2}-\\d{2}$',
+      }),
+      depart_after: stringProperty('Departure time in HH:mm or HH:mm:ss format', {
+        pattern: '^([0-2]?\\d|3[0-5]):[0-5]\\d(:[0-5]\\d)?$',
+      }),
+      limit: numberProperty('Maximum number of trip options to include (1-10)', {
+        default: 3,
+        minimum: 1,
+        maximum: 10,
+      }),
+      include_realtime: booleanProperty('Include real-time delay information if available', {
+        default: true,
+      }),
+      include_alerts: booleanProperty('Include current service alerts for matching routes and stations', {
+        default: true,
+      }),
+    },
+    required: ['origin_station', 'destination_station'],
+  },
 } satisfies Record<string, JsonObjectSchema>;
 
 // ============================================================================
@@ -392,6 +515,32 @@ export interface TripRealtimeStatus {
   next_stop: string | null;
 }
 
+export interface StationPairTrip {
+  trip_id: string;
+  route_name: string;
+  destination: string;
+  direction: string;
+  origin_station: string;
+  destination_station: string;
+  scheduled_origin_departure: string;
+  actual_origin_departure: string | null;
+  scheduled_destination_arrival: string;
+  actual_destination_arrival: string | null;
+  duration_minutes: number;
+  origin_delay_minutes: number | null;
+  destination_delay_minutes: number | null;
+  status: 'on_time' | 'delayed' | 'cancelled' | 'unknown';
+}
+
+export interface FirstLastTrains {
+  service_date: string;
+  origin_station: string;
+  destination_station: string;
+  first_train: StationPairTrip | null;
+  last_train: StationPairTrip | null;
+  total_direct_trips: number;
+}
+
 // Type exports for schema inference
 export type GetDeparturesInput = z.infer<typeof GetDeparturesSchema>;
 export type GetRouteScheduleInput = z.infer<typeof GetRouteScheduleSchema>;
@@ -399,3 +548,6 @@ export type GetServiceAlertsInput = z.infer<typeof GetServiceAlertsSchema>;
 export type SearchStationsInput = z.infer<typeof SearchStationsSchema>;
 export type GetTripDetailsInput = z.infer<typeof GetTripDetailsSchema>;
 export type GetStationInfoInput = z.infer<typeof GetStationInfoSchema>;
+export type GetStationPairScheduleInput = z.infer<typeof GetStationPairScheduleSchema>;
+export type GetFirstLastTrainsInput = z.infer<typeof GetFirstLastTrainsSchema>;
+export type PlanMetroNorthTripInput = z.infer<typeof PlanMetroNorthTripSchema>;

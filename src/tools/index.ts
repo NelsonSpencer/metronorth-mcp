@@ -8,7 +8,11 @@ import {
   SearchStationsSchema,
   GetTripDetailsSchema,
   GetStationInfoSchema,
+  GetStationPairScheduleSchema,
+  GetFirstLastTrainsSchema,
+  PlanMetroNorthTripSchema,
   ToolInputSchemas,
+  type StationPairTrip,
 } from '../domain/gtfs.js';
 import { getScheduleService } from '../infrastructure/schedule-service.js';
 import { getStationService } from '../infrastructure/station-service.js';
@@ -70,6 +74,27 @@ export const toolDefinitions = [
     title: 'Get System Status',
     description: 'Check GTFS freshness, cached data counts, and realtime feed availability.',
     inputSchema: ToolInputSchemas.get_system_status,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'get_station_pair_schedule',
+    title: 'Get Station Pair Schedule',
+    description: 'Find direct trains between two Metro-North stations.',
+    inputSchema: ToolInputSchemas.get_station_pair_schedule,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'get_first_last_trains',
+    title: 'Get First Last Trains',
+    description: 'Get the first and last direct trains between two stations for a service date.',
+    inputSchema: ToolInputSchemas.get_first_last_trains,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'plan_metro_north_trip',
+    title: 'Plan Metro-North Trip',
+    description: 'Plan a direct Metro-North trip with options, alerts, and data freshness.',
+    inputSchema: ToolInputSchemas.plan_metro_north_trip,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
 ] satisfies Tool[];
@@ -147,6 +172,15 @@ export async function handleToolCall(
         break;
       case 'get_system_status':
         result = await handleGetSystemStatus();
+        break;
+      case 'get_station_pair_schedule':
+        result = await handleGetStationPairSchedule(args);
+        break;
+      case 'get_first_last_trains':
+        result = await handleGetFirstLastTrains(args);
+        break;
+      case 'plan_metro_north_trip':
+        result = await handlePlanMetroNorthTrip(args);
         break;
       default:
         throw new UnknownToolError(`Unknown tool: ${name}`);
@@ -391,4 +425,182 @@ async function handleGetSystemStatus() {
       uptime: process.uptime(),
     },
   };
+}
+
+function formatStationPairTrip(trip: StationPairTrip) {
+  return {
+    trip_id: trip.trip_id,
+    route: trip.route_name,
+    destination: trip.destination,
+    direction: trip.direction,
+    origin: trip.origin_station,
+    destination_station: trip.destination_station,
+    origin_departure: {
+      scheduled: trip.scheduled_origin_departure,
+      actual: trip.actual_origin_departure || trip.scheduled_origin_departure,
+      delay_minutes: trip.origin_delay_minutes,
+    },
+    destination_arrival: {
+      scheduled: trip.scheduled_destination_arrival,
+      actual: trip.actual_destination_arrival || trip.scheduled_destination_arrival,
+      delay_minutes: trip.destination_delay_minutes,
+    },
+    duration_minutes: trip.duration_minutes,
+    status: trip.status,
+  };
+}
+
+async function handleGetStationPairSchedule(args: Record<string, unknown>) {
+  const {
+    origin_station,
+    destination_station,
+    date,
+    depart_after,
+    limit,
+    include_realtime,
+  } = parseArgs(GetStationPairScheduleSchema, args);
+  const scheduleService = getScheduleService();
+  const serviceDate = date || getMetroNorthServiceContext().serviceDate;
+  const trips = await scheduleService.getStationPairSchedule(origin_station, destination_station, {
+    date: serviceDate,
+    departAfter: depart_after,
+    limit,
+    includeRealtime: include_realtime,
+  });
+
+  if (trips.length === 0) {
+    throw new ToolDomainError(
+      'not_found',
+      `No direct trains found from "${origin_station}" to "${destination_station}"`,
+      {
+        suggestion:
+          'Use search_stations to verify station names. Transfer planning is not included in this tool.',
+      }
+    );
+  }
+
+  return {
+    origin: origin_station,
+    destination: destination_station,
+    service_date: serviceDate,
+    depart_after: depart_after || null,
+    trips: trips.map(formatStationPairTrip),
+    total_direct_trips: trips.length,
+    realtime_available: trips.some(
+      (trip) => trip.origin_delay_minutes !== null || trip.destination_delay_minutes !== null
+    ),
+  };
+}
+
+async function handleGetFirstLastTrains(args: Record<string, unknown>) {
+  const { origin_station, destination_station, date, include_realtime } = parseArgs(
+    GetFirstLastTrainsSchema,
+    args
+  );
+  const scheduleService = getScheduleService();
+  const serviceDate = date || getMetroNorthServiceContext().serviceDate;
+  const result = await scheduleService.getFirstLastTrains(
+    origin_station,
+    destination_station,
+    serviceDate,
+    include_realtime
+  );
+
+  return {
+    ...result,
+    first_train: result.first_train ? formatStationPairTrip(result.first_train) : null,
+    last_train: result.last_train ? formatStationPairTrip(result.last_train) : null,
+    no_service:
+      result.total_direct_trips === 0
+        ? `No direct trains found from "${origin_station}" to "${destination_station}" on ${serviceDate}`
+        : null,
+  };
+}
+
+async function handlePlanMetroNorthTrip(args: Record<string, unknown>) {
+  const {
+    origin_station,
+    destination_station,
+    date,
+    depart_after,
+    limit,
+    include_realtime,
+    include_alerts,
+  } = parseArgs(PlanMetroNorthTripSchema, args);
+  const scheduleService = getScheduleService();
+  const serviceDate = date || getMetroNorthServiceContext().serviceDate;
+  const options = await scheduleService.getStationPairSchedule(origin_station, destination_station, {
+    date: serviceDate,
+    departAfter: depart_after,
+    limit,
+    includeRealtime: include_realtime,
+  });
+
+  if (options.length === 0) {
+    throw new ToolDomainError(
+      'not_found',
+      `No direct trip options found from "${origin_station}" to "${destination_station}"`,
+      {
+        suggestion:
+          'Use search_stations to verify station names. Transfer planning is not included in this tool.',
+      }
+    );
+  }
+
+  const status = await handleGetSystemStatus();
+  const alerts = include_alerts ? await getRelevantTripAlerts(options, origin_station, destination_station) : [];
+
+  return {
+    origin: origin_station,
+    destination: destination_station,
+    service_date: serviceDate,
+    depart_after: depart_after || null,
+    recommended_option: formatStationPairTrip(options[0]),
+    alternate_options: options.slice(1).map(formatStationPairTrip),
+    alerts,
+    data_freshness: status.gtfs_data,
+    realtime: {
+      requested: include_realtime,
+      available: status.realtime.available,
+      caveat: 'Realtime departures and alerts use public MTA feeds and are best-effort.',
+    },
+    next_step:
+      'Use get_trip_details with the selected trip_id for the full stop list, or get_service_alerts for broader service context.',
+  };
+}
+
+async function getRelevantTripAlerts(
+  options: StationPairTrip[],
+  originStationName: string,
+  destinationStationName: string
+) {
+  const realtimeClient = getRealtimeClient();
+  const stationService = getStationService();
+  const [originStation, destinationStation, alerts] = await Promise.all([
+    stationService.findStationByName(originStationName),
+    stationService.findStationByName(destinationStationName),
+    realtimeClient.getServiceAlerts(),
+  ]);
+  const stationIds = new Set(
+    [originStation?.stop_id, destinationStation?.stop_id].filter((id): id is string => Boolean(id))
+  );
+  const routeIds = new Set(
+    options.flatMap((option) => ROUTE_IDS_BY_NAME[option.route_name.toLowerCase()] || [])
+  );
+
+  return alerts
+    .filter((alert) =>
+      alert.informed_entities.some(
+        (entity) =>
+          (entity.route_id && routeIds.has(entity.route_id)) ||
+          (entity.stop_id && stationIds.has(entity.stop_id))
+      )
+    )
+    .map((alert) => ({
+      id: alert.alert_id,
+      header: alert.header_text,
+      description: alert.description_text,
+      cause: alert.cause,
+      effect: alert.effect,
+    }));
 }

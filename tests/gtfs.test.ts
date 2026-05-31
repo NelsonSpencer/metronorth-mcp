@@ -5,6 +5,9 @@ import {
   GetRouteScheduleSchema,
   SearchStationsSchema,
   GetStationInfoSchema,
+  GetStationPairScheduleSchema,
+  GetFirstLastTrainsSchema,
+  PlanMetroNorthTripSchema,
   ToolInputSchemas,
 } from '../src/domain/gtfs.js';
 
@@ -134,6 +137,39 @@ describe('GTFS Schemas', () => {
     });
   });
 
+  describe('station-to-station schemas', () => {
+    it('accept station-pair schedule inputs with after-midnight GTFS times', () => {
+      const result = GetStationPairScheduleSchema.parse({
+        origin_station: 'Grand Central',
+        destination_station: 'White Plains',
+        depart_after: '25:10',
+      });
+
+      expect(result.limit).toBe(5);
+      expect(result.include_realtime).toBe(true);
+    });
+
+    it('accept first/last train inputs', () => {
+      const result = GetFirstLastTrainsSchema.safeParse({
+        origin_station: 'Grand Central',
+        destination_station: 'White Plains',
+        date: '2024-01-01',
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it('accept trip-planning inputs and defaults', () => {
+      const result = PlanMetroNorthTripSchema.parse({
+        origin_station: 'Grand Central',
+        destination_station: 'White Plains',
+      });
+
+      expect(result.limit).toBe(3);
+      expect(result.include_alerts).toBe(true);
+    });
+  });
+
   describe('ToolInputSchemas', () => {
     it('keeps MCP tool schemas colocated with validation schemas', () => {
       expect(ToolInputSchemas.get_departures.required).toContain('station_name');
@@ -144,6 +180,13 @@ describe('GTFS Schemas', () => {
       ]);
       expect(ToolInputSchemas.get_route_schedule.properties.date.pattern).toBe(
         '^\\d{4}-\\d{2}-\\d{2}$'
+      );
+      expect(ToolInputSchemas.get_station_pair_schedule.required).toEqual([
+        'origin_station',
+        'destination_station',
+      ]);
+      expect(ToolInputSchemas.plan_metro_north_trip.properties.depart_after.pattern).toBe(
+        '^([0-2]?\\d|3[0-5]):[0-5]\\d(:[0-5]\\d)?$'
       );
     });
   });
