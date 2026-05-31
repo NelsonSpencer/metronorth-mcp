@@ -23,7 +23,7 @@ vi.mock('../src/infrastructure/database.js', () => {
             route_id: '1',
             route_long_name: 'Hudson',
             trip_headsign: 'Poughkeepsie',
-            direction_id: 1,
+            direction_id: 0,
             departure_time: '12:00:00',
             arrival_time: '11:59:00',
             stop_sequence: 1,

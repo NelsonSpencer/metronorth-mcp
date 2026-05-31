@@ -103,9 +103,9 @@ export class ScheduleService {
     // Build direction filter
     let directionFilter = '';
     if (direction === 'inbound') {
-      directionFilter = 'AND t.direction_id = 0';
-    } else if (direction === 'outbound') {
       directionFilter = 'AND t.direction_id = 1';
+    } else if (direction === 'outbound') {
+      directionFilter = 'AND t.direction_id = 0';
     }
 
     const query = `
@@ -310,7 +310,7 @@ export class ScheduleService {
     return {
       trip_id: trip.trip_id,
       route_name: ROUTE_NAMES[trip.route_id] || trip.route_long_name,
-      direction: trip.direction_id === 0 ? 'Inbound' : 'Outbound',
+      direction: trip.direction_id === 1 ? 'Inbound' : 'Outbound',
       service_days: serviceDays,
       stops,
       realtime_status: realtimeStatus,
@@ -346,9 +346,9 @@ export class ScheduleService {
 
     let directionFilter = '';
     if (direction === 'inbound') {
-      directionFilter = 'AND t.direction_id = 0';
-    } else if (direction === 'outbound') {
       directionFilter = 'AND t.direction_id = 1';
+    } else if (direction === 'outbound') {
+      directionFilter = 'AND t.direction_id = 0';
     }
 
     // Get first stop of each trip (origin station)

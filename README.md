@@ -226,6 +226,12 @@ npm run lint
 npm run build
 ```
 
+After loading GTFS data with `npm run gtfs:update`, run a real-data smoke check:
+
+```bash
+npm run smoke
+```
+
 Useful scripts:
 
 ```bash

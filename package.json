@@ -11,6 +11,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node build/index.js",
+    "smoke": "npm run build && node scripts/smoke.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint src/",
