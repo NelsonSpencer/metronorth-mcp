@@ -38,16 +38,19 @@ describe('Tool Definitions', () => {
   it('should have all required tools', () => {
     const toolNames = toolDefinitions.map((t) => t.name);
 
-    expect(toolNames).toContain('get_departures');
-    expect(toolNames).toContain('get_trip_details');
-    expect(toolNames).toContain('get_route_schedule');
-    expect(toolNames).toContain('get_service_alerts');
-    expect(toolNames).toContain('search_stations');
-    expect(toolNames).toContain('get_station_info');
-    expect(toolNames).toContain('get_system_status');
-    expect(toolNames).toContain('get_station_pair_schedule');
-    expect(toolNames).toContain('get_first_last_trains');
-    expect(toolNames).toContain('plan_metro_north_trip');
+    expect(toolDefinitions).toHaveLength(10);
+    expect(toolNames).toEqual([
+      'get_departures',
+      'get_trip_details',
+      'get_route_schedule',
+      'get_service_alerts',
+      'search_stations',
+      'get_station_info',
+      'get_system_status',
+      'get_station_pair_schedule',
+      'get_first_last_trains',
+      'plan_metro_north_trip',
+    ]);
   });
 
   it('should have valid input schemas', () => {
@@ -63,6 +66,74 @@ describe('Tool Definitions', () => {
       expect(tool.description).toBeDefined();
       expect(tool.description.length).toBeGreaterThan(10);
     }
+  });
+});
+
+describe('Tool Result Contract', () => {
+  it('returns the stable structured success shape with explicit services', async () => {
+    const stationService = {
+      findStationByName: vi.fn(),
+      getStationInfo: vi.fn(),
+      searchStations: vi.fn(async () => [
+        {
+          stop_id: 'GCT',
+          stop_name: 'Grand Central Terminal',
+          zone_id: '1',
+        },
+      ]),
+    };
+    const structuredContent = {
+      query: 'Grand',
+      results: [
+        {
+          stop_id: 'GCT',
+          name: 'Grand Central Terminal',
+          zone: '1',
+        },
+      ],
+      total: 1,
+    };
+
+    const result = await handleToolCall(
+      'search_stations',
+      {
+        query: 'Grand',
+        limit: 1,
+      },
+      { stationService }
+    );
+
+    expect(result).toEqual({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(structuredContent, null, 2),
+        },
+      ],
+      structuredContent,
+    });
+    expect(result.isError).toBeUndefined();
+    expect(stationService.searchStations).toHaveBeenCalledWith('Grand', 1);
+  });
+
+  it('returns the stable structured error shape', async () => {
+    const result = await handleToolCall('get_departures', {});
+    const error = result.structuredContent?.error as Record<string, unknown>;
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toEqual({
+      error: {
+        code: 'invalid_arguments',
+        message: error.message,
+        tool: 'get_departures',
+      },
+    });
+    expect(result.content).toEqual([
+      {
+        type: 'text',
+        text: `Error: ${error.message}`,
+      },
+    ]);
   });
 });
 
