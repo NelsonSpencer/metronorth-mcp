@@ -297,8 +297,8 @@ docker-compose logs -f metronorth-mcp
 - [Support](SUPPORT.md)
 - [Governance](GOVERNANCE.md)
 - [Security](SECURITY.md)
-- [Dependency upgrades](docs/dependency-upgrades.md)
-- [Socket triage](docs/socket-triage.md)
+- [Dependency upgrades](https://github.com/NelsonSpencer/metronorth-mcp/blob/main/docs/dependency-upgrades.md)
+- [Socket triage](https://github.com/NelsonSpencer/metronorth-mcp/blob/main/docs/socket-triage.md)
 - [Changelog](CHANGELOG.md)
 
 ## License

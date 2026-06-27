@@ -64,6 +64,6 @@ Do not document a public hosted MCP endpoint as part of a release unless a maint
 
 ## Dependency and Socket Reviews
 
-- Use [docs/socket-triage.md](docs/socket-triage.md) for recurring Socket findings and accepted constraints.
-- Use [docs/dependency-upgrades.md](docs/dependency-upgrades.md) when planning dependency updates.
+- Use [docs/socket-triage.md](https://github.com/NelsonSpencer/metronorth-mcp/blob/main/docs/socket-triage.md) for recurring Socket findings and accepted constraints.
+- Use [docs/dependency-upgrades.md](https://github.com/NelsonSpencer/metronorth-mcp/blob/main/docs/dependency-upgrades.md) when planning dependency updates.
 - Prefer removing unused transitive dependency paths over adding long-lived allow-list comments.
