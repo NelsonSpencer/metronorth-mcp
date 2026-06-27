@@ -45,3 +45,24 @@ After dependency changes, verify the old chain stays removed:
 ```bash
 npm ls gtfs-realtime-bindings protobufjs-cli glob --omit=dev
 ```
+
+## Deferred Major Upgrades
+
+Dependabot is intentionally scoped to `minor` and `patch` updates only (see
+[`.github/dependabot.yml`](../.github/dependabot.yml)). Major version bumps are not
+auto-proposed, because they can carry breaking changes into a published package. This is a
+deliberate stability posture, not an oversight.
+
+The majors currently held back, with the reason each is deferred:
+
+| Package | Held at | Latest major | Why deferred |
+| --- | --- | --- | --- |
+| `zod` | 3.x | 4.x | Breaking parse/error API; used across tool input schemas. Highest-effort; warrants its own deliberate migration. |
+| `zod-validation-error` | 3.x | 5.x | Couples to `zod`; upgrade together with the `zod` 4 migration. |
+| `eslint` | 9.x | 10.x | Flat config already in place, so mostly mechanical; low risk when scheduled. |
+| `typescript` | 5.x | 6.x | Compiler major; re-run typecheck/build and review new diagnostics. |
+| `pino` | 9.x | 10.x | Logging major; re-check structured logging and transport behavior. |
+| `@types/node` | 22.x | 26.x | Kept aligned with the supported `engines` Node line (22+). Bump alongside any runtime-floor change. |
+
+When taking on a deferred major, do it on its own branch, run the routine checks above, and
+update this table and `CHANGELOG.md`.

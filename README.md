@@ -207,7 +207,7 @@ First run downloads the public Metro-North GTFS ZIP and imports it into SQLite.
 ## Runtime Requirements
 
 - Node.js `>=22.0.0`.
-- `better-sqlite3` uses a native SQLite binding. npm usually installs a prebuilt binary; if one is unavailable for your platform, npm may compile it locally.
+- `better-sqlite3` uses a native SQLite binding. npm usually installs a prebuilt binary; if one is unavailable for your platform, npm may compile it locally. If a local build fails (for example on a very new Node release or a platform without build tooling), install on Node.js 22 or 24 LTS, where prebuilt binaries are published.
 - The local database defaults to `~/.cache/metronorth-mcp/metronorth.db` and uses SQLite PRAGMAs for WAL mode, normal sync, cache size, and in-memory temp storage.
 - Redis is optional and only used when `REDIS_URL` is set.
 

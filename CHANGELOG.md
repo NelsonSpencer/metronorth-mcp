@@ -2,6 +2,13 @@
 
 All notable project changes are summarized here.
 
+## 2.1.3 - 2026-06-27
+
+- Documented deferred major dependency upgrades and the Dependabot minor/patch-only scope in `docs/dependency-upgrades.md`.
+- Added a native-install fallback note (use Node.js 22 or 24 LTS if a `better-sqlite3` build fails) to the README and SUPPORT docs.
+- Removed maintainer-internal `docs/` from the published npm tarball; they remain in the repository.
+- Added a private Code of Conduct reporting path.
+
 ## 2.1.2 - 2026-06-27
 
 - Added OSS support, governance, dependency, and Socket triage documentation.
