@@ -14,6 +14,29 @@ const logger = createModuleLogger('http');
 
 /** Maximum accepted request body size (1 MiB). Larger bodies get a 413. */
 const MAX_BODY_BYTES = 1024 * 1024;
+
+/**
+ * Module-level reference to the running HTTP server.
+ * Set by {@link runHttp} so that {@link _closeActiveHttpServer} can shut it
+ * down from tests without changing the public signature of `runHttp`.
+ * @internal
+ */
+let _activeHttpServer: HttpServer | null = null;
+
+/**
+ * Close the HTTP server that was started by the most recent {@link runHttp}
+ * call in this process.
+ *
+ * **Not part of the public API.** Exported exclusively for test teardown so
+ * that vitest can exit cleanly without requiring a SIGTERM.
+ * @internal
+ */
+export function _closeActiveHttpServer(): Promise<void> {
+  const server = _activeHttpServer;
+  _activeHttpServer = null;
+  return server ? closeServer(server) : Promise.resolve();
+}
+
 /** Abort sockets whose request is not fully received in time. */
 const REQUEST_TIMEOUT_MS = 30_000;
 /** Abort sockets that do not send headers in time. */
@@ -63,6 +86,8 @@ export async function runHttp(opts: RunHttpOptions): Promise<void> {
   const httpServer = createServer((req, res) => {
     void handleRequest(req, res, opts, transports, allowedHosts);
   });
+
+  _activeHttpServer = httpServer;
 
   httpServer.requestTimeout = REQUEST_TIMEOUT_MS;
   httpServer.headersTimeout = HEADERS_TIMEOUT_MS;

@@ -246,7 +246,58 @@ The public install path is local stdio:
 npx -y metronorth-mcp
 ```
 
-Do not point strangers at a maintainer-owned hosted URL unless you intentionally want to operate a public service. If you wrap this server with HTTP for a personal tool, bind it to localhost by default, require bearer-token authentication before exposing it beyond localhost, and keep tunnel URLs private.
+Do not point strangers at a maintainer-owned hosted URL unless you intentionally want to operate a public service. If you wrap this server with HTTP for a personal tool, bind it to localhost by default, require bearer-token authentication before exposing it beyond localhost, and keep tunnel URLs private. The built-in `--http` transport described below follows exactly this posture.
+
+## Remote / HTTP transport
+
+`metronorth-mcp` speaks the local stdio transport by default. Passing `--http` instead exposes an opt-in Streamable HTTP endpoint, so any remote MCP host or assistant that speaks Streamable HTTP can reach the server. stdio stays the default; nothing about the existing `npx -y metronorth-mcp` install path or any stdio MCP client changes.
+
+```bash
+metronorth-mcp --http
+# serves http://127.0.0.1:8000/mcp
+```
+
+The server speaks plain HTTP on loopback and does not terminate TLS. HTTPS and outside reachability come from whatever fronts it: a local tunnel, or a reverse proxy if you self-host. This stays a local, user-run capability, not a maintainer-operated endpoint.
+
+### Flags and environment variables
+
+CLI flags take precedence over the `MCP_HTTP*` environment variables.
+
+| Flag                       | Environment variable       | Default          | Purpose                                                          |
+| -------------------------- | -------------------------- | ---------------- | ---------------------------------------------------------------- |
+| `--http`                   | `MCP_HTTP`                 | `false` (stdio)  | Enable the HTTP transport.                                       |
+| `--host <host>`            | `MCP_HTTP_HOST`            | `127.0.0.1`      | Bind address. Keep it on loopback unless you front it.           |
+| `--port <port>`            | `MCP_HTTP_PORT`            | `8000`           | Listen port.                                                     |
+| `--token <token>`          | `MCP_HTTP_TOKEN`           | unset            | Require `Authorization: Bearer <token>` on `/mcp`.              |
+| `--allowed-hosts <list>`   | `MCP_HTTP_ALLOWED_HOSTS`   | loopback names   | Comma-separated `Host` allow-list (DNS-rebind protection).       |
+| `--allowed-origins <list>` | `MCP_HTTP_ALLOWED_ORIGINS` | unset            | Comma-separated `Origin` allow-list (DNS-rebind protection).     |
+
+`MCP_HTTP` accepts `1`, `true`, `yes`, or `on`. Run `metronorth-mcp --help` for the same summary.
+
+### Endpoints
+
+- `POST` / `GET` / `DELETE` `/mcp` — the Streamable HTTP MCP endpoint. A session is negotiated on the `initialize` request and carried in the `mcp-session-id` header.
+- `GET /health` — unauthenticated liveness probe returning `{"status":"ok"}`, for tunnels and proxies.
+
+### Connecting a remote MCP host
+
+The endpoint is a generic Streamable HTTP MCP server with no host-specific code, so it works with any remote MCP host or assistant that speaks Streamable HTTP. [Poke](https://poke.com) is one such host; others exist now and more will emerge. The two connection shapes below use Poke only as a worked example.
+
+1. **Local tunnel (no hosting).** Run the server locally, then point the host's tunnel at `http://localhost:8000/mcp`:
+
+   ```bash
+   metronorth-mcp --http
+   # then, with your chosen host's tunnel command — for example:
+   npx poke@latest tunnel http://localhost:8000/mcp -n "metronorth"
+   ```
+
+2. **Remote URL (self-host behind HTTPS).** If you run the server behind your own HTTPS proxy, give the host your `https://…/mcp` URL plus a bearer token / API key. With Poke, for example, add it at `poke.com/settings/connections/integrations/new`.
+
+Other assistants and hosts connect the same way: a tunnel to the loopback URL, or a self-hosted HTTPS URL with a token.
+
+### Security
+
+The transport binds `127.0.0.1` by default and enables DNS-rebinding protection. Set `--token` (or `MCP_HTTP_TOKEN`) for any exposure beyond loopback, and keep tunnel URLs and tokens private. See [SECURITY.md](SECURITY.md) and the full [HTTP transport reference](https://github.com/NelsonSpencer/metronorth-mcp/blob/main/docs/http-transport.md).
 
 ## Development Checks
 
@@ -297,6 +348,7 @@ docker-compose logs -f metronorth-mcp
 - [Support](SUPPORT.md)
 - [Governance](GOVERNANCE.md)
 - [Security](SECURITY.md)
+- [HTTP transport reference](https://github.com/NelsonSpencer/metronorth-mcp/blob/main/docs/http-transport.md)
 - [Dependency upgrades](https://github.com/NelsonSpencer/metronorth-mcp/blob/main/docs/dependency-upgrades.md)
 - [Socket triage](https://github.com/NelsonSpencer/metronorth-mcp/blob/main/docs/socket-triage.md)
 - [Changelog](CHANGELOG.md)
