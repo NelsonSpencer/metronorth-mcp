@@ -7,7 +7,7 @@
 - The latest published npm version.
 - Local stdio MCP usage on Node.js 22 or newer.
 - Public MTA GTFS, GTFS-Realtime, and alert feed integration.
-- Native `better-sqlite3` installs on common supported Node platforms.
+- Native `better-sqlite3` installs on common supported Node platforms. If a local build fails, install on Node.js 22 or 24 LTS, where prebuilt binaries are published.
 
 ## What Is Not Supported
 

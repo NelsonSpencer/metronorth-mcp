@@ -27,4 +27,4 @@ This project is an unofficial Metro-North MCP server. Normal use does not requir
 
 Hosted HTTP deployments are outside the default project model. If you expose this server through an HTTP wrapper, secure that wrapper with authentication, rate limiting, and private deployment controls.
 
-Expected runtime outbound URLs are documented in [README.md](README.md#network-access). Dependency scanner notes are documented in [docs/socket-triage.md](docs/socket-triage.md).
+Expected runtime outbound URLs are documented in [README.md](README.md#network-access). Dependency scanner notes are documented in [docs/socket-triage.md](https://github.com/NelsonSpencer/metronorth-mcp/blob/main/docs/socket-triage.md).

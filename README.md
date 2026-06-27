@@ -207,7 +207,7 @@ First run downloads the public Metro-North GTFS ZIP and imports it into SQLite.
 ## Runtime Requirements
 
 - Node.js `>=22.0.0`.
-- `better-sqlite3` uses a native SQLite binding. npm usually installs a prebuilt binary; if one is unavailable for your platform, npm may compile it locally.
+- `better-sqlite3` uses a native SQLite binding. npm usually installs a prebuilt binary; if one is unavailable for your platform, npm may compile it locally. If a local build fails (for example on a very new Node release or a platform without build tooling), install on Node.js 22 or 24 LTS, where prebuilt binaries are published.
 - The local database defaults to `~/.cache/metronorth-mcp/metronorth.db` and uses SQLite PRAGMAs for WAL mode, normal sync, cache size, and in-memory temp storage.
 - Redis is optional and only used when `REDIS_URL` is set.
 
@@ -297,8 +297,8 @@ docker-compose logs -f metronorth-mcp
 - [Support](SUPPORT.md)
 - [Governance](GOVERNANCE.md)
 - [Security](SECURITY.md)
-- [Dependency upgrades](docs/dependency-upgrades.md)
-- [Socket triage](docs/socket-triage.md)
+- [Dependency upgrades](https://github.com/NelsonSpencer/metronorth-mcp/blob/main/docs/dependency-upgrades.md)
+- [Socket triage](https://github.com/NelsonSpencer/metronorth-mcp/blob/main/docs/socket-triage.md)
 - [Changelog](CHANGELOG.md)
 
 ## License
