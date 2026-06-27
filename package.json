@@ -1,8 +1,9 @@
 {
   "name": "metronorth-mcp",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "MCP server for Metro-North schedules, stations, service alerts, and real-time departures",
   "type": "module",
+  "packageManager": "npm@11.4.1",
   "main": "build/index.js",
   "bin": {
     "metronorth-mcp": "build/index.js"
@@ -17,9 +18,16 @@
   "homepage": "https://github.com/NelsonSpencer/metronorth-mcp#readme",
   "files": [
     "build",
+    "docs",
     ".env.example",
+    "CHANGELOG.md",
+    "CODE_OF_CONDUCT.md",
+    "CONTRIBUTING.md",
+    "GOVERNANCE.md",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "SECURITY.md",
+    "SUPPORT.md"
   ],
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -55,10 +63,10 @@
     "better-sqlite3": "^12.10.0",
     "csv-parser": "^3.0.0",
     "fuse.js": "^7.0.0",
-    "gtfs-realtime-bindings": "^2.0.0",
     "ioredis": "^5.4.1",
     "pino": "^9.6.0",
     "pino-pretty": "^13.0.0",
+    "protobufjs": "^8.6.5",
     "zod": "^3.23.8",
     "zod-validation-error": "^3.4.0"
   },

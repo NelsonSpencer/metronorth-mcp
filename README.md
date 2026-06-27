@@ -11,6 +11,13 @@ Uses public MTA GTFS and GTFS-Realtime feeds. No MTA API key required.
 
 This package runs as a local stdio MCP server by default. The project does not operate or publish a shared hosted MCP endpoint.
 
+## Project Model
+
+- Local stdio MCP server; no maintainer-operated hosted endpoint, uptime commitment, or SLA.
+- Unofficial project; not affiliated with or endorsed by the MTA.
+- Best-effort public MTA schedule, realtime, and alert data.
+- Node.js 22 or newer is required. Current development expects npm and the native `better-sqlite3` install path to work on the target machine.
+
 ## Install with an Agent
 
 Paste this into your MCP-capable coding agent:
@@ -143,18 +150,18 @@ Recommended flow:
 
 Tool results include readable text and MCP `structuredContent`. Invalid inputs and unknown stations return structured errors.
 
-| Tool | Use |
-| --- | --- |
-| `search_stations` | Search stations by name |
-| `get_departures` | Get upcoming departures from a station |
-| `get_trip_details` | Get stop-level details for a trip |
-| `get_route_schedule` | Get a route schedule by date and direction |
-| `get_service_alerts` | Get current service alerts |
-| `get_station_info` | Get station metadata and served routes |
-| `get_system_status` | Check feed availability and local data freshness |
-| `get_station_pair_schedule` | Find direct trains between two stations |
-| `get_first_last_trains` | Get first and last direct trains for a service date |
-| `plan_metro_north_trip` | Plan a direct trip with options, alerts, and freshness |
+| Tool                        | Use                                                    |
+| --------------------------- | ------------------------------------------------------ |
+| `search_stations`           | Search stations by name                                |
+| `get_departures`            | Get upcoming departures from a station                 |
+| `get_trip_details`          | Get stop-level details for a trip                      |
+| `get_route_schedule`        | Get a route schedule by date and direction             |
+| `get_service_alerts`        | Get current service alerts                             |
+| `get_station_info`          | Get station metadata and served routes                 |
+| `get_system_status`         | Check feed availability and local data freshness       |
+| `get_station_pair_schedule` | Find direct trains between two stations                |
+| `get_first_last_trains`     | Get first and last direct trains for a service date    |
+| `plan_metro_north_trip`     | Plan a direct trip with options, alerts, and freshness |
 
 Example:
 
@@ -197,6 +204,13 @@ npm start
 
 First run downloads the public Metro-North GTFS ZIP and imports it into SQLite.
 
+## Runtime Requirements
+
+- Node.js `>=22.0.0`.
+- `better-sqlite3` uses a native SQLite binding. npm usually installs a prebuilt binary; if one is unavailable for your platform, npm may compile it locally.
+- The local database defaults to `~/.cache/metronorth-mcp/metronorth.db` and uses SQLite PRAGMAs for WAL mode, normal sync, cache size, and in-memory temp storage.
+- Redis is optional and only used when `REDIS_URL` is set.
+
 ## Configuration
 
 Create `.env` from `.env.example`.
@@ -213,6 +227,16 @@ CACHE_TTL_SECONDS=300
 If `DB_PATH` is empty, schedule data is stored in `~/.cache/metronorth-mcp/metronorth.db`.
 
 Redis is optional. If `REDIS_URL` is empty, the server uses in-memory caching.
+
+## Network Access
+
+Default runtime network access is outbound only:
+
+- Static GTFS ZIP: `https://rrgtfsfeeds.s3.amazonaws.com/gtfsmnr.zip`
+- Metro-North GTFS-Realtime trips: `https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/mnr%2Fgtfs-mnr`
+- MTA alerts: `https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fall-alerts`
+
+npm install may also contact the npm registry and package artifact hosts. The default stdio server does not listen on a network port.
 
 ## Transport and Hosting
 
@@ -267,6 +291,15 @@ docker-compose logs -f metronorth-mcp
 - Real-time departures and alerts use public GTFS-Realtime feeds and are best-effort.
 - Tools handle dynamic lookups; resources expose reference data; prompts provide reusable workflows.
 - Unofficial project. Not affiliated with or endorsed by the MTA.
+
+## Community Documents
+
+- [Support](SUPPORT.md)
+- [Governance](GOVERNANCE.md)
+- [Security](SECURITY.md)
+- [Dependency upgrades](docs/dependency-upgrades.md)
+- [Socket triage](docs/socket-triage.md)
+- [Changelog](CHANGELOG.md)
 
 ## License
 

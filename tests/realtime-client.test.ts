@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const axiosGetMock = vi.hoisted(() => vi.fn());
 const decodeMock = vi.hoisted(() => vi.fn());
@@ -7,35 +7,29 @@ const cacheSetMock = vi.hoisted(() => vi.fn());
 const dbRunMock = vi.hoisted(() => vi.fn());
 const preparedQueries = vi.hoisted(() => [] as string[]);
 
-vi.mock('axios', () => ({
+vi.mock("axios", () => ({
   default: {
     get: axiosGetMock,
     isAxiosError: vi.fn(() => false),
   },
 }));
 
-vi.mock('gtfs-realtime-bindings', () => ({
-  default: {
-    transit_realtime: {
-      FeedMessage: {
-        decode: decodeMock,
-      },
-    },
-  },
+vi.mock("../src/infrastructure/gtfs-realtime-decoder.js", () => ({
+  decodeGtfsRealtimeFeed: decodeMock,
 }));
 
-vi.mock('../src/infrastructure/cache.js', () => ({
+vi.mock("../src/infrastructure/cache.js", () => ({
   getCache: vi.fn(() => ({
     get: cacheGetMock,
     set: cacheSetMock,
   })),
   CACHE_KEYS: {
-    tripUpdates: 'realtime:trip_updates',
-    serviceAlerts: 'realtime:alerts',
+    tripUpdates: "realtime:trip_updates",
+    serviceAlerts: "realtime:alerts",
   },
 }));
 
-vi.mock('../src/infrastructure/database.js', () => ({
+vi.mock("../src/infrastructure/database.js", () => ({
   getSqlite: vi.fn(() => ({
     prepare: vi.fn((query: string) => {
       preparedQueries.push(query);
@@ -51,20 +45,24 @@ vi.mock('../src/infrastructure/database.js', () => ({
 
 function alertEntity(
   id: string,
-  informedEntity?: Array<{ agencyId?: string; routeId?: string; stopId?: string }>
+  informedEntity?: Array<{
+    agencyId?: string;
+    routeId?: string;
+    stopId?: string;
+  }>,
 ) {
   return {
     id,
     alert: {
       informedEntity,
       headerText: {
-        translation: [{ text: id, language: 'en' }],
+        translation: [{ text: id, language: "en" }],
       },
     },
   };
 }
 
-describe('MetroNorthRealtime', () => {
+describe("MetroNorthRealtime", () => {
   beforeEach(() => {
     axiosGetMock.mockReset();
     axiosGetMock.mockResolvedValue({ data: new ArrayBuffer(0) });
@@ -77,53 +75,55 @@ describe('MetroNorthRealtime', () => {
     preparedQueries.length = 0;
   });
 
-  it('keeps service alerts for Metro-North routes 1 through 8, agency MNR, and system alerts', async () => {
+  it("keeps service alerts for Metro-North routes 1 through 8, agency MNR, and system alerts", async () => {
     decodeMock.mockReturnValue({
       entity: [
-        alertEntity('route-4', [{ routeId: '4' }]),
-        alertEntity('route-8', [{ routeId: '8' }]),
-        alertEntity('agency-mnr', [{ agencyId: 'MNR' }]),
-        alertEntity('system-wide', []),
-        alertEntity('other-route', [{ routeId: '9' }]),
+        alertEntity("route-4", [{ routeId: "4" }]),
+        alertEntity("route-8", [{ routeId: "8" }]),
+        alertEntity("agency-mnr", [{ agencyId: "MNR" }]),
+        alertEntity("system-wide", []),
+        alertEntity("other-route", [{ routeId: "9" }]),
       ],
     });
 
-    const { MetroNorthRealtime } = await import('../src/infrastructure/realtime-client.js');
+    const { MetroNorthRealtime } =
+      await import("../src/infrastructure/realtime-client.js");
     const client = new MetroNorthRealtime();
 
     const alerts = await client.getServiceAlerts();
 
     expect(alerts.map((alert) => alert.alert_id)).toEqual([
-      'route-4',
-      'route-8',
-      'agency-mnr',
-      'system-wide',
+      "route-4",
+      "route-8",
+      "agency-mnr",
+      "system-wide",
     ]);
   });
 
-  it('deletes stale realtime fallback rows before persisting fresh trip updates', async () => {
+  it("deletes stale realtime fallback rows before persisting fresh trip updates", async () => {
     decodeMock.mockReturnValue({
       entity: [
         {
-          id: '456',
+          id: "456",
           tripUpdate: {
             trip: {
-              tripId: 'trip-1',
-              routeId: '2',
+              tripId: "trip-1",
+              routeId: "2",
             },
             stopTimeUpdate: [
               {
-                stopId: 'GCT',
+                stopId: "GCT",
                 departure: { delay: 120 },
               },
             ],
-            timestamp: '1717000000',
+            timestamp: "1717000000",
           },
         },
       ],
     });
 
-    const { MetroNorthRealtime } = await import('../src/infrastructure/realtime-client.js');
+    const { MetroNorthRealtime } =
+      await import("../src/infrastructure/realtime-client.js");
     const client = new MetroNorthRealtime();
 
     const updates = await client.getTripUpdates();
@@ -131,65 +131,76 @@ describe('MetroNorthRealtime', () => {
     expect(updates).toHaveLength(1);
     expect(
       preparedQueries.some(
-        (query) => query.includes('DELETE FROM realtime_updates') && query.includes("'-5 minutes'")
-      )
+        (query) =>
+          query.includes("DELETE FROM realtime_updates") &&
+          query.includes("'-5 minutes'"),
+      ),
     ).toBe(true);
     expect(dbRunMock).toHaveBeenCalledWith();
-    expect(dbRunMock).toHaveBeenCalledWith('trip-1', 'GCT', null, 120, null);
+    expect(dbRunMock).toHaveBeenCalledWith("trip-1", "GCT", null, 120, null);
   });
 
-  it('preserves explicit zero delays from realtime trip updates', async () => {
+  it("preserves explicit zero delays from realtime trip updates", async () => {
     decodeMock.mockReturnValue({
       entity: [
         {
-          id: '456',
+          id: "456",
           tripUpdate: {
             trip: {
-              tripId: 'trip-1',
-              routeId: '2',
+              tripId: "trip-1",
+              routeId: "2",
             },
             stopTimeUpdate: [
               {
-                stopId: 'GCT',
+                stopId: "GCT",
                 arrival: { delay: 0 },
               },
               {
-                stopId: 'WP',
+                stopId: "WP",
                 departure: { delay: 0 },
               },
             ],
-            timestamp: '1717000000',
+            timestamp: "1717000000",
           },
         },
       ],
     });
 
-    const { MetroNorthRealtime } = await import('../src/infrastructure/realtime-client.js');
+    const { MetroNorthRealtime } =
+      await import("../src/infrastructure/realtime-client.js");
     const client = new MetroNorthRealtime();
 
     const updates = await client.getTripUpdates();
     const arrivalInfo = client.getRealtimeInfoForTripAtStopFromUpdates(
       updates,
-      'trip-1',
-      'GCT',
-      '12:00:00',
-      '456'
+      "trip-1",
+      "GCT",
+      "12:00:00",
+      "456",
     );
     const departureInfo = client.getRealtimeInfoForTripAtStopFromUpdates(
       updates,
-      'trip-1',
-      'WP',
-      '12:30:00',
-      '456'
+      "trip-1",
+      "WP",
+      "12:30:00",
+      "456",
     );
 
     expect(updates[0].stop_time_updates).toEqual([
-      expect.objectContaining({ stop_id: 'GCT', arrival_delay: 0, departure_delay: null }),
-      expect.objectContaining({ stop_id: 'WP', arrival_delay: null, departure_delay: 0 }),
+      expect.objectContaining({
+        stop_id: "GCT",
+        arrival_delay: 0,
+        departure_delay: null,
+      }),
+      expect.objectContaining({
+        stop_id: "WP",
+        arrival_delay: null,
+        departure_delay: 0,
+      }),
     ]);
-    expect(arrivalInfo).toMatchObject({ delaySeconds: 0, status: 'on_time' });
-    expect(departureInfo).toMatchObject({ delaySeconds: 0, status: 'on_time' });
-    expect(dbRunMock).toHaveBeenCalledWith('trip-1', 'GCT', 0, null, null);
-    expect(dbRunMock).toHaveBeenCalledWith('trip-1', 'WP', null, 0, null);
+    expect(arrivalInfo).toMatchObject({ delaySeconds: 0, status: "on_time" });
+    expect(departureInfo).toMatchObject({ delaySeconds: 0, status: "on_time" });
+    expect(dbRunMock).toHaveBeenCalledWith("trip-1", "GCT", 0, null, null);
+    expect(dbRunMock).toHaveBeenCalledWith("trip-1", "WP", null, 0, null);
   });
 });

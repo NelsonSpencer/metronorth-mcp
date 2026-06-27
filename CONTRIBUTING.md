@@ -8,6 +8,7 @@ Requirements:
 
 - Node.js 22 or newer
 - npm
+- A local environment that can install the native `better-sqlite3` package. If a prebuilt binary is unavailable, npm may need compiler tooling for your platform.
 
 ```bash
 npm install
@@ -48,3 +49,21 @@ PRs should describe:
 - Data freshness, caching, or feed assumptions.
 
 If a change affects package publishing, Docker, CI, or dependency security, call that out explicitly.
+
+## Release Process
+
+Releases are maintainer-led.
+
+1. Confirm the intended version and changelog entry.
+2. Run the local checks listed above on Node.js 22 or newer.
+3. Update package metadata only as part of the release change.
+4. Tag releases as `vX.Y.Z`.
+5. Publish through the repository's release/publish path.
+
+Do not document a public hosted MCP endpoint as part of a release unless a maintainer explicitly decides to operate one and defines its support model.
+
+## Dependency and Socket Reviews
+
+- Use [docs/socket-triage.md](docs/socket-triage.md) for recurring Socket findings and accepted constraints.
+- Use [docs/dependency-upgrades.md](docs/dependency-upgrades.md) when planning dependency updates.
+- Prefer removing unused transitive dependency paths over adding long-lived allow-list comments.

@@ -14,12 +14,21 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install actionlint
         run: |
+          set -euo pipefail
+
+          version="1.7.12"
+          asset="actionlint_${version}_linux_amd64.tar.gz"
+          url="https://github.com/rhysd/actionlint/releases/download/v${version}/${asset}"
+          checksum="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+
           mkdir -p /tmp/actionlint
-          curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash | bash -s -- 1.7.12 /tmp/actionlint
+          curl -fsSL "$url" -o "/tmp/actionlint/${asset}"
+          echo "${checksum}  /tmp/actionlint/${asset}" | sha256sum -c -
+          tar -xzf "/tmp/actionlint/${asset}" -C /tmp/actionlint
 
       - name: Lint GitHub Actions workflows
         run: /tmp/actionlint/actionlint -color
@@ -32,11 +41,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [22, 24]
+        node-version: [22, 24, 26]
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
