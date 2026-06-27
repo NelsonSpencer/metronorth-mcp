@@ -1,0 +1,61 @@
+name: Bug report
+description: Report incorrect behavior in the Metro-North MCP server.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Do not include secrets or private tunnel URLs.
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      description: Output from `npm view metronorth-mcp version` or your installed version.
+      placeholder: "2.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Runtime
+      options:
+        - npx/local stdio
+        - Docker stdio
+        - MCP client configuration
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the behavior and what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Include the MCP tool/resource/prompt call if relevant.
+      placeholder: |
+        1. Call `search_stations` with ...
+        2. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or output
+      description: Paste relevant non-sensitive logs.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I have not included secrets, private tunnel URLs, or sensitive environment values.
+          required: true
+        - label: I understand realtime and alert data are best-effort public feed data.
+          required: true

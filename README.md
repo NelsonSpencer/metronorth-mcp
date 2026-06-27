@@ -3,11 +3,13 @@
 [![CI](https://github.com/NelsonSpencer/metronorth-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/NelsonSpencer/metronorth-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/metronorth-mcp)](https://www.npmjs.com/package/metronorth-mcp)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![Node.js 20+](https://img.shields.io/badge/node-%3E%3D20-339933.svg)
+![Node.js 22+](https://img.shields.io/badge/node-%3E%3D22-339933.svg)
 
 MCP server for Metro-North schedules, stations, service alerts, and real-time departures.
 
 Uses public MTA GTFS and GTFS-Realtime feeds. No MTA API key required.
+
+This package runs as a local stdio MCP server by default. The project does not operate or publish a shared hosted MCP endpoint.
 
 ## Install with an Agent
 
@@ -212,6 +214,16 @@ If `DB_PATH` is empty, schedule data is stored in `~/.cache/metronorth-mcp/metro
 
 Redis is optional. If `REDIS_URL` is empty, the server uses in-memory caching.
 
+## Transport and Hosting
+
+The public install path is local stdio:
+
+```bash
+npx -y metronorth-mcp
+```
+
+Do not point strangers at a maintainer-owned hosted URL unless you intentionally want to operate a public service. If you wrap this server with HTTP for a personal tool, bind it to localhost by default, require bearer-token authentication before exposing it beyond localhost, and keep tunnel URLs private.
+
 ## Development Checks
 
 ```bash
@@ -220,6 +232,7 @@ npm test
 npm run lint
 npm run build
 npm run smoke:mcp
+npm audit --omit=dev --audit-level=high
 ```
 
 ## Docker
