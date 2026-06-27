@@ -270,7 +270,7 @@ CLI flags take precedence over the `MCP_HTTP*` environment variables.
 | `--port <port>`            | `MCP_HTTP_PORT`            | `8000`           | Listen port.                                                     |
 | `--token <token>`          | `MCP_HTTP_TOKEN`           | unset            | Require `Authorization: Bearer <token>` on `/mcp`.              |
 | `--allowed-hosts <list>`   | `MCP_HTTP_ALLOWED_HOSTS`   | loopback names   | Comma-separated `Host` allow-list (DNS-rebind protection).       |
-| `--allowed-origins <list>` | `MCP_HTTP_ALLOWED_ORIGINS` | unset            | Comma-separated `Origin` allow-list (DNS-rebind protection).     |
+| `--allowed-origins <list>` | `MCP_HTTP_ALLOWED_ORIGINS` | loopback origins | Comma-separated `Origin` allow-list (DNS-rebind protection). Header-less clients still pass. |
 
 `MCP_HTTP` accepts `1`, `true`, `yes`, or `on`. Run `metronorth-mcp --help` for the same summary.
 
@@ -297,7 +297,7 @@ Other assistants and hosts connect the same way: a tunnel to the loopback URL, o
 
 ### Security
 
-The transport binds `127.0.0.1` by default and enables DNS-rebinding protection. Set `--token` (or `MCP_HTTP_TOKEN`) for any exposure beyond loopback, and keep tunnel URLs and tokens private. See [SECURITY.md](SECURITY.md) and the full [HTTP transport reference](https://github.com/NelsonSpencer/metronorth-mcp/blob/main/docs/http-transport.md).
+The transport binds `127.0.0.1` by default and enables DNS-rebinding protection. It fails closed: binding a non-loopback address (for example `--host 0.0.0.0`) without a token is refused at startup. Set `--token` (or `MCP_HTTP_TOKEN`) for any exposure beyond loopback, and keep tunnel URLs and tokens private. See [SECURITY.md](SECURITY.md) and the full [HTTP transport reference](https://github.com/NelsonSpencer/metronorth-mcp/blob/main/docs/http-transport.md).
 
 ## Development Checks
 

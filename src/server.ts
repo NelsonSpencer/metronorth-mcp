@@ -141,14 +141,27 @@ export async function cleanup(): Promise<void> {
 }
 
 let isShuttingDown = false;
+let shutdownHandlersRegistered = false;
+let registeredBeforeCleanup: (() => Promise<void>) | undefined;
 
 /**
  * Register SIGINT/SIGTERM handlers that release shared resources and exit.
+ *
+ * Idempotent: the process-level signal listeners are registered only once, so
+ * calling this more than once does not stack duplicate handlers. The most
+ * recent `beforeCleanup` hook is the one that runs on shutdown.
  *
  * @param beforeCleanup optional hook (e.g. close an HTTP listener) run before
  *   the shared cache/database cleanup.
  */
 export function setupShutdownHandlers(beforeCleanup?: () => Promise<void>): void {
+  registeredBeforeCleanup = beforeCleanup;
+
+  if (shutdownHandlersRegistered) {
+    return;
+  }
+  shutdownHandlersRegistered = true;
+
   const shutdown = async (signal: string) => {
     if (isShuttingDown) return;
     isShuttingDown = true;
@@ -156,8 +169,8 @@ export function setupShutdownHandlers(beforeCleanup?: () => Promise<void>): void
     logger.info({ signal }, 'Shutting down server');
 
     try {
-      if (beforeCleanup) {
-        await beforeCleanup();
+      if (registeredBeforeCleanup) {
+        await registeredBeforeCleanup();
       }
       await cleanup();
       logger.info('Cleanup complete');

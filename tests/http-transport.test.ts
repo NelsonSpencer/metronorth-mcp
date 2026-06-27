@@ -15,8 +15,8 @@
  * - `station-service.js`– fully mocked (returns empty station lists).
  * - `gtfs-loader.js`    – fully mocked (needsUpdate → false, no network).
  *
- * Teardown: `_closeActiveHttpServer()` closes the listening socket so vitest
- * can exit cleanly after the suite.
+ * Teardown: the handle returned by `runHttp` closes the listening socket (and
+ * all transports) so vitest can exit cleanly after the suite.
  */
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -103,7 +103,7 @@ vi.mock('../src/infrastructure/gtfs-loader.js', () => ({
 // Static imports (after vi.mock declarations so mocks are in place)
 // ---------------------------------------------------------------------------
 
-import { runHttp, _closeActiveHttpServer } from '../src/http-server.js';
+import { runHttp, type RunHttpHandle } from '../src/http-server.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -123,11 +123,42 @@ function getFreePort(): Promise<number> {
   });
 }
 
+/**
+ * Open a real MCP session with a raw `initialize` POST.
+ *
+ * The SDK requires the Accept header to list both `application/json` and
+ * `text/event-stream`; the response is an SSE stream carrying the init result
+ * and the `mcp-session-id` header. Returns the raw {@link Response} so callers
+ * can read the status / session-id header before draining the body.
+ */
+function rawInitialize(targetPort: number, token?: string): Promise<Response> {
+  return fetch(`http://127.0.0.1:${targetPort}/mcp`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'http-transport-test', version: '1.0.0' },
+      },
+    }),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Suite state
 // ---------------------------------------------------------------------------
 
 let port: number;
+/** Handle to the long-lived suite server (token-authenticated, loopback). */
+let serverHandle: RunHttpHandle;
 /** MCP client authenticated with TEST_TOKEN. */
 let mcpClient: Client;
 
@@ -139,7 +170,9 @@ beforeAll(async () => {
   port = await getFreePort();
 
   // Boot the HTTP server in-process on the ephemeral port with a bearer token.
-  await runHttp({ host: '127.0.0.1', port, token: TEST_TOKEN });
+  serverHandle = await runHttp({ host: '127.0.0.1', port, token: TEST_TOKEN });
+  // The handle reports the actual bound port (important for `--port 0`).
+  port = serverHandle.port;
 
   // Build and connect an authenticated MCP client.
   mcpClient = new Client(
@@ -162,8 +195,8 @@ beforeAll(async () => {
 afterAll(async () => {
   // Close the MCP client first so the underlying HTTP connection is released.
   await mcpClient.close().catch(() => {});
-  // Then close the HTTP server so the event loop can drain and vitest exits.
-  await _closeActiveHttpServer();
+  // Then close the HTTP server (transports + listener) so vitest can exit.
+  await serverHandle.close();
 });
 
 // ---------------------------------------------------------------------------
@@ -174,6 +207,10 @@ describe('MCP protocol over HTTP', () => {
   it('tools/list returns the expected 10 tools', async () => {
     const result = await mcpClient.listTools();
 
+    // Canary: the exact count (10) and the named tools below pin the public MCP
+    // surface exposed over HTTP. If a tool is added/removed/renamed, update both
+    // this count and the smoke scripts deliberately — a drift here means the
+    // wire contract changed.
     expect(result.tools).toHaveLength(10);
     const names = result.tools.map((t) => t.name);
     expect(names).toContain('get_departures');
@@ -273,5 +310,103 @@ describe('bearer-token authentication', () => {
     const res = await fetch(`http://127.0.0.1:${port}/health`);
 
     expect(res.status).toBe(200);
+  });
+});
+
+describe('unauthenticated loopback', () => {
+  it('permits requests when no token is set (the intended tunnel case)', async () => {
+    const p = await getFreePort();
+    // Loopback + no token must still start and serve traffic.
+    const handle = await runHttp({ host: '127.0.0.1', port: p });
+
+    try {
+      const health = await fetch(`http://127.0.0.1:${handle.port}/health`);
+      expect(health.status).toBe(200);
+
+      // A full MCP client connects WITHOUT any Authorization header and works.
+      const client = new Client(
+        { name: 'no-token-test', version: '1.0.0' },
+        { capabilities: {} }
+      );
+      const transport = new StreamableHTTPClientTransport(
+        new URL(`http://127.0.0.1:${handle.port}/mcp`)
+      );
+      await client.connect(transport);
+
+      const tools = await client.listTools();
+      expect(tools.tools.length).toBeGreaterThan(0);
+
+      await client.close().catch(() => {});
+    } finally {
+      await handle.close();
+    }
+  });
+});
+
+describe('session bounding', () => {
+  it('returns 503 once the session cap is exceeded', async () => {
+    const p = await getFreePort();
+    // Lower the cap via a test-only option; the production default stays at 256.
+    const handle = await runHttp({
+      host: '127.0.0.1',
+      port: p,
+      token: TEST_TOKEN,
+      maxSessions: 1,
+    });
+
+    try {
+      // First initialize fills the single available session slot.
+      const first = await rawInitialize(handle.port, TEST_TOKEN);
+      expect(first.status).toBe(200);
+      expect(first.headers.get('mcp-session-id')).toBeTruthy();
+      await first.text(); // drain the SSE response so the socket is released
+
+      // Second initialize exceeds the cap and is refused before a transport
+      // is created.
+      const second = await rawInitialize(handle.port, TEST_TOKEN);
+      expect(second.status).toBe(503);
+      const body = (await second.json()) as { error: string };
+      expect(body.error).toBe('too_many_sessions');
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('evicts idle sessions after the TTL', async () => {
+    const p = await getFreePort();
+    // Tiny TTL / sweep interval so eviction is observable within the test.
+    const handle = await runHttp({
+      host: '127.0.0.1',
+      port: p,
+      token: TEST_TOKEN,
+      idleTimeoutMs: 40,
+      sweepIntervalMs: 20,
+    });
+
+    try {
+      const initRes = await rawInitialize(handle.port, TEST_TOKEN);
+      expect(initRes.status).toBe(200);
+      const sessionId = initRes.headers.get('mcp-session-id');
+      expect(sessionId).toBeTruthy();
+      await initRes.text(); // drain the SSE response so the session goes idle
+
+      // Wait well past the idle TTL plus a sweep cycle.
+      await new Promise((r) => setTimeout(r, 200));
+
+      // The sweeper closed and removed the session: a GET with its id now 404s
+      // (before eviction this id was valid, proving it was actually evicted).
+      const gone = await fetch(`http://127.0.0.1:${handle.port}/mcp`, {
+        method: 'GET',
+        headers: {
+          Accept: 'text/event-stream',
+          Authorization: `Bearer ${TEST_TOKEN}`,
+          'Mcp-Session-Id': sessionId as string,
+        },
+      });
+      expect(gone.status).toBe(404);
+      await gone.text();
+    } finally {
+      await handle.close();
+    }
   });
 });

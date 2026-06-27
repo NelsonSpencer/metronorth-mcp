@@ -43,10 +43,20 @@ function getFreePort() {
   });
 }
 
-/** Poll GET /health until 200 or timeout. */
-async function waitForHealth(port) {
+/**
+ * Poll GET /health until 200 or timeout.
+ *
+ * `getSpawnError` is checked each cycle so a failed spawn surfaces immediately
+ * as a rejection here instead of as an uncaught exception thrown from the
+ * child process 'error' listener.
+ */
+async function waitForHealth(port, getSpawnError) {
   const deadline = Date.now() + HEALTH_POLL_TIMEOUT_MS;
   while (Date.now() < deadline) {
+    const spawnError = getSpawnError?.();
+    if (spawnError) {
+      throw new Error(`Failed to spawn server: ${spawnError.message}`);
+    }
     try {
       const res = await fetch(`http://127.0.0.1:${port}/health`);
       if (res.status === 200) return;
@@ -198,12 +208,15 @@ async function main() {
       serverStderr += chunk.toString();
     });
 
+    // Capture a spawn failure rather than throwing inside the listener (which
+    // would become an uncaught exception). waitForHealth rejects on it.
+    let spawnError = null;
     serverProcess.on('error', (err) => {
-      throw new Error(`Failed to spawn server: ${err.message}`);
+      spawnError = err;
     });
 
     // Wait for the server to become healthy.
-    await waitForHealth(port);
+    await waitForHealth(port, () => spawnError);
 
     // Connect the MCP client over HTTP with bearer-token auth.
     client = new Client(

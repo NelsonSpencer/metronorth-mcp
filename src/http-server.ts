@@ -4,7 +4,7 @@ import {
   type Server as HttpServer,
   type ServerResponse,
 } from 'node:http';
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { createMcpServer, initializeData, setupShutdownHandlers } from './server.js';
@@ -15,32 +15,32 @@ const logger = createModuleLogger('http');
 /** Maximum accepted request body size (1 MiB). Larger bodies get a 413. */
 const MAX_BODY_BYTES = 1024 * 1024;
 
-/**
- * Module-level reference to the running HTTP server.
- * Set by {@link runHttp} so that {@link _closeActiveHttpServer} can shut it
- * down from tests without changing the public signature of `runHttp`.
- * @internal
- */
-let _activeHttpServer: HttpServer | null = null;
+/** Hosts that are safe to bind without a token (the tunnel case). */
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 
-/**
- * Close the HTTP server that was started by the most recent {@link runHttp}
- * call in this process.
- *
- * **Not part of the public API.** Exported exclusively for test teardown so
- * that vitest can exit cleanly without requiring a SIGTERM.
- * @internal
- */
-export function _closeActiveHttpServer(): Promise<void> {
-  const server = _activeHttpServer;
-  _activeHttpServer = null;
-  return server ? closeServer(server) : Promise.resolve();
-}
+/** Hard ceiling on concurrent MCP sessions before new ones are rejected. */
+const MAX_SESSIONS = 256;
+/** A session is evicted after this long without any routed request. */
+const SESSION_IDLE_TTL_MS = 10 * 60 * 1000;
+/** How often the idle-session sweeper runs. */
+const SESSION_SWEEP_INTERVAL_MS = 60 * 1000;
+/** Cheap connection cap (not a rate limiter — that is intentionally out of scope). */
+const MAX_CONNECTIONS = 64;
 
 /** Abort sockets whose request is not fully received in time. */
 const REQUEST_TIMEOUT_MS = 30_000;
 /** Abort sockets that do not send headers in time. */
 const HEADERS_TIMEOUT_MS = 20_000;
+
+/**
+ * Is `host` a loopback bind address that is safe to expose without a token?
+ *
+ * Only the canonical loopback names qualify; anything else (`0.0.0.0`, a LAN
+ * IP, a public interface) must carry a bearer token before it will start.
+ */
+export function isLoopbackHost(host: string): boolean {
+  return LOOPBACK_HOSTS.has(host.trim().toLowerCase());
+}
 
 export interface RunHttpOptions {
   host: string;
@@ -48,6 +48,34 @@ export interface RunHttpOptions {
   token?: string;
   allowedHosts?: string[];
   allowedOrigins?: string[];
+  /** Test-only override of the session cap. Defaults to {@link MAX_SESSIONS}. */
+  maxSessions?: number;
+  /** Test-only override of the idle eviction TTL. Defaults to {@link SESSION_IDLE_TTL_MS}. */
+  idleTimeoutMs?: number;
+  /** Test-only override of the sweeper interval. Defaults to {@link SESSION_SWEEP_INTERVAL_MS}. */
+  sweepIntervalMs?: number;
+}
+
+/** Handle returned by {@link runHttp} once the server is listening. */
+export interface RunHttpHandle {
+  /** Actual bound port (resolves `--port 0` to the ephemeral port). */
+  port: number;
+  /** Idempotent ordered shutdown: transports → map → sweeper → listener. */
+  close: () => Promise<void>;
+}
+
+interface SessionEntry {
+  transport: StreamableHTTPServerTransport;
+  /** Epoch ms of the most recent request routed to this session. */
+  lastActivity: number;
+}
+
+interface ServerContext {
+  opts: RunHttpOptions;
+  transports: Map<string, SessionEntry>;
+  allowedHosts: string[];
+  allowedOrigins: string[];
+  maxSessions: number;
 }
 
 class BodyTooLargeError extends Error {}
@@ -57,13 +85,28 @@ class BodyTooLargeError extends Error {}
  *
  * Safe-by-default posture:
  * - binds the caller-provided host (CLI/env default `127.0.0.1`, never `0.0.0.0`);
- * - enables the SDK's DNS-rebinding protection with an explicit Host allow-list;
+ * - **fails closed**: a non-loopback bind without a token throws before listening;
+ * - enables the SDK's DNS-rebinding protection with explicit Host and Origin
+ *   allow-lists (the Origin check only fires when a browser sends an Origin
+ *   header, so header-less clients still pass);
  * - optional bearer-token auth, with a prominent warning when none is set;
+ * - bounds the session map (cap + idle eviction) and the connection count;
  * - caps request bodies and sets request/headers timeouts;
  * - never leaks error details to clients (generic 500).
+ *
+ * @returns a handle exposing the actual bound port and an idempotent `close()`.
  */
-export async function runHttp(opts: RunHttpOptions): Promise<void> {
+export async function runHttp(opts: RunHttpOptions): Promise<RunHttpHandle> {
+  // Fail closed: refuse to expose a non-loopback address without a token.
+  if (!isLoopbackHost(opts.host) && !opts.token) {
+    throw new Error(
+      `Refusing to bind the HTTP transport to non-loopback host "${opts.host}" without a token. ` +
+        'Set a token (--token / MCP_HTTP_TOKEN) to require Bearer auth before exposing it.'
+    );
+  }
+
   if (!opts.token) {
+    // Loopback + no token is the intended local tunnel case; warn but allow it.
     logger.warn(
       'HTTP transport is UNAUTHENTICATED — set --token (or MCP_HTTP_TOKEN) before exposing it beyond loopback'
     );
@@ -71,54 +114,104 @@ export async function runHttp(opts: RunHttpOptions): Promise<void> {
 
   await initializeData();
 
-  const transports = new Map<string, StreamableHTTPServerTransport>();
+  const transports = new Map<string, SessionEntry>();
+  const maxSessions = opts.maxSessions ?? MAX_SESSIONS;
+  const idleTtlMs = opts.idleTimeoutMs ?? SESSION_IDLE_TTL_MS;
+  const sweepIntervalMs = opts.sweepIntervalMs ?? SESSION_SWEEP_INTERVAL_MS;
 
-  // DNS-rebinding protection is off in the SDK unless an allow-list is set, so
-  // we always provide one. The default covers loopback; a tunnel that rewrites
-  // the Host header can widen it via --allowed-hosts / MCP_HTTP_ALLOWED_HOSTS.
-  const allowedHosts = opts.allowedHosts ?? [
-    '127.0.0.1',
-    'localhost',
-    `127.0.0.1:${opts.port}`,
-    `localhost:${opts.port}`,
-  ];
+  // Allow-lists are filled in after binding so the actual port (relevant for
+  // `--port 0`) is reflected in the loopback Host/Origin defaults.
+  const ctx: ServerContext = {
+    opts,
+    transports,
+    allowedHosts: [],
+    allowedOrigins: [],
+    maxSessions,
+  };
 
   const httpServer = createServer((req, res) => {
-    void handleRequest(req, res, opts, transports, allowedHosts);
+    void handleRequest(req, res, ctx);
   });
 
-  _activeHttpServer = httpServer;
-
+  httpServer.maxConnections = MAX_CONNECTIONS;
   httpServer.requestTimeout = REQUEST_TIMEOUT_MS;
   httpServer.headersTimeout = HEADERS_TIMEOUT_MS;
 
-  setupShutdownHandlers(async () => {
-    await closeServer(httpServer);
-    for (const transport of transports.values()) {
-      await transport.close();
+  // Idle-session sweeper. `.unref()` so it never keeps the process alive; it is
+  // cleared during shutdown. Expired sessions are collected first, then closed,
+  // to avoid mutating the map while iterating it.
+  const sweeper = setInterval(() => {
+    const now = Date.now();
+    const expired: string[] = [];
+    for (const [sessionId, entry] of transports) {
+      if (now - entry.lastActivity > idleTtlMs) {
+        expired.push(sessionId);
+      }
+    }
+    for (const sessionId of expired) {
+      const entry = transports.get(sessionId);
+      if (entry) {
+        transports.delete(sessionId);
+        void entry.transport.close();
+      }
+    }
+  }, sweepIntervalMs);
+  sweeper.unref();
+
+  // Ordered, idempotent shutdown: close every transport FIRST, clear the map,
+  // clear the sweeper, THEN close the listener (force-closing keep-alive sockets
+  // so it can't hang).
+  let closed = false;
+  const closeAll = async (): Promise<void> => {
+    if (closed) return;
+    closed = true;
+    for (const entry of [...transports.values()]) {
+      await entry.transport.close();
     }
     transports.clear();
-  });
+    clearInterval(sweeper);
+    await closeServer(httpServer);
+  };
+
+  setupShutdownHandlers(closeAll);
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject);
     httpServer.listen(opts.port, opts.host, () => {
       httpServer.off('error', reject);
-      logger.info(
-        { host: opts.host, port: opts.port, authenticated: Boolean(opts.token) },
-        `Metro-North MCP Server running on http://${opts.host}:${opts.port}/mcp`
-      );
       resolve();
     });
   });
+
+  const address = httpServer.address();
+  const boundPort = address && typeof address === 'object' ? address.port : opts.port;
+
+  // DNS-rebinding protection is off in the SDK unless allow-lists are set, so we
+  // always provide them. Defaults cover loopback; a tunnel that rewrites the
+  // Host/Origin can widen them via --allowed-hosts / --allowed-origins.
+  ctx.allowedHosts = opts.allowedHosts ?? [
+    '127.0.0.1',
+    'localhost',
+    `127.0.0.1:${boundPort}`,
+    `localhost:${boundPort}`,
+  ];
+  ctx.allowedOrigins = opts.allowedOrigins ?? [
+    `http://127.0.0.1:${boundPort}`,
+    `http://localhost:${boundPort}`,
+  ];
+
+  logger.info(
+    { host: opts.host, port: boundPort, authenticated: Boolean(opts.token) },
+    `Metro-North MCP Server running on http://${opts.host}:${boundPort}/mcp`
+  );
+
+  return { port: boundPort, close: closeAll };
 }
 
 async function handleRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: RunHttpOptions,
-  transports: Map<string, StreamableHTTPServerTransport>,
-  allowedHosts: string[]
+  ctx: ServerContext
 ): Promise<void> {
   try {
     const pathname = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
@@ -140,23 +233,24 @@ async function handleRequest(
     }
 
     // Optional bearer-token auth guards every /mcp method.
-    if (opts.token && !isAuthorized(req, opts.token)) {
+    if (ctx.opts.token && !isAuthorized(req, ctx.opts.token)) {
       sendJson(res, 401, { error: 'unauthorized' });
       return;
     }
 
     if (req.method === 'POST') {
-      await handleMcpPost(req, res, opts, transports, allowedHosts);
+      await handleMcpPost(req, res, ctx);
       return;
     }
 
     if (req.method === 'GET' || req.method === 'DELETE') {
-      const transport = getTransport(req, transports);
-      if (!transport) {
+      const session = getSession(req, ctx.transports);
+      if (!session) {
         sendJson(res, 404, { error: 'session_not_found' });
         return;
       }
-      await transport.handleRequest(req, res);
+      session.lastActivity = Date.now();
+      await session.transport.handleRequest(req, res);
       return;
     }
 
@@ -178,9 +272,7 @@ async function handleRequest(
 async function handleMcpPost(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: RunHttpOptions,
-  transports: Map<string, StreamableHTTPServerTransport>,
-  allowedHosts: string[]
+  ctx: ServerContext
 ): Promise<void> {
   let body: unknown;
   try {
@@ -188,15 +280,18 @@ async function handleMcpPost(
   } catch (error) {
     if (error instanceof BodyTooLargeError) {
       sendJson(res, 413, { error: 'payload_too_large' });
+      // Free the socket promptly instead of waiting for the request timeout.
+      req.destroy();
       return;
     }
     sendJson(res, 400, { error: 'invalid_request' });
     return;
   }
 
-  const existing = getTransport(req, transports);
+  const existing = getSession(req, ctx.transports);
   if (existing) {
-    await existing.handleRequest(req, res, body);
+    existing.lastActivity = Date.now();
+    await existing.transport.handleRequest(req, res, body);
     return;
   }
 
@@ -206,20 +301,26 @@ async function handleMcpPost(
     return;
   }
 
+  // Bound the session map: refuse new sessions once the cap is reached.
+  if (ctx.transports.size >= ctx.maxSessions) {
+    sendJson(res, 503, { error: 'too_many_sessions' });
+    return;
+  }
+
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     enableDnsRebindingProtection: true,
-    allowedHosts,
-    allowedOrigins: opts.allowedOrigins,
+    allowedHosts: ctx.allowedHosts,
+    allowedOrigins: ctx.allowedOrigins,
     onsessioninitialized: (sessionId: string) => {
-      transports.set(sessionId, transport);
+      ctx.transports.set(sessionId, { transport, lastActivity: Date.now() });
     },
   });
 
   transport.onclose = () => {
     const sessionId = transport.sessionId;
     if (sessionId) {
-      transports.delete(sessionId);
+      ctx.transports.delete(sessionId);
     }
   };
 
@@ -228,10 +329,10 @@ async function handleMcpPost(
   await transport.handleRequest(req, res, body);
 }
 
-function getTransport(
+function getSession(
   req: IncomingMessage,
-  transports: Map<string, StreamableHTTPServerTransport>
-): StreamableHTTPServerTransport | undefined {
+  transports: Map<string, SessionEntry>
+): SessionEntry | undefined {
   const header = req.headers['mcp-session-id'];
   const sessionId = Array.isArray(header) ? header[0] : header;
   return sessionId ? transports.get(sessionId) : undefined;
@@ -249,13 +350,17 @@ function isAuthorized(req: IncomingMessage, token: string): boolean {
   return safeEqual(match[1], token);
 }
 
+/**
+ * Constant-time string comparison that does not leak length.
+ *
+ * Both inputs are hashed to fixed-length SHA-256 digests before
+ * {@link timingSafeEqual}, so there is no length-based early return and the
+ * comparison is always over equal-length buffers.
+ */
 function safeEqual(a: string, b: string): boolean {
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
-  if (bufA.length !== bufB.length) {
-    return false;
-  }
-  return timingSafeEqual(bufA, bufB);
+  const digestA = createHash('sha256').update(a).digest();
+  const digestB = createHash('sha256').update(b).digest();
+  return timingSafeEqual(digestA, digestB);
 }
 
 function readJsonBody(req: IncomingMessage): Promise<unknown> {
@@ -319,5 +424,8 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 function closeServer(server: HttpServer): Promise<void> {
   return new Promise((resolve) => {
     server.close(() => resolve());
+    // Force-close lingering keep-alive sockets so close() can't hang
+    // (Node >= 18.2; this project requires >= 22).
+    server.closeAllConnections();
   });
 }
