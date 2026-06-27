@@ -11,6 +11,21 @@ function emptyStringToUndefined(value: unknown): unknown {
   return value === '' ? undefined : value;
 }
 
+function envFlagToBoolean(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value !== 'string') return false;
+  return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+}
+
+function csvToList(value: unknown): string[] | undefined {
+  if (typeof value !== 'string') return undefined;
+  const items = value
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+  return items.length > 0 ? items : undefined;
+}
+
 // Environment variable validation schema
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -19,6 +34,16 @@ const envSchema = z.object({
   DB_PATH: z.preprocess(emptyStringToUndefined, z.string().default(getDefaultDbPath())),
   GTFS_UPDATE_INTERVAL_HOURS: z.coerce.number().default(24),
   CACHE_TTL_SECONDS: z.coerce.number().default(300),
+  // Opt-in HTTP transport (stdio remains the default). CLI flags override these.
+  MCP_HTTP: z.preprocess(envFlagToBoolean, z.boolean().default(false)),
+  MCP_HTTP_HOST: z.preprocess(emptyStringToUndefined, z.string().default('127.0.0.1')),
+  MCP_HTTP_PORT: z.preprocess(
+    emptyStringToUndefined,
+    z.coerce.number().int().min(0).max(65535).default(8000)
+  ),
+  MCP_HTTP_TOKEN: z.preprocess(emptyStringToUndefined, z.string().optional()),
+  MCP_HTTP_ALLOWED_HOSTS: z.preprocess(csvToList, z.array(z.string()).optional()),
+  MCP_HTTP_ALLOWED_ORIGINS: z.preprocess(csvToList, z.array(z.string()).optional()),
 });
 
 // Parse and validate environment
