@@ -48,10 +48,13 @@ npm ls gtfs-realtime-bindings protobufjs-cli glob --omit=dev
 
 ## Deferred Major Upgrades
 
-Dependabot is intentionally scoped to `minor` and `patch` updates only (see
-[`.github/dependabot.yml`](../.github/dependabot.yml)). Major version bumps are not
-auto-proposed, because they can carry breaking changes into a published package. This is a
-deliberate stability posture, not an oversight.
+Dependabot batches `minor` and `patch` updates into grouped PRs and holds `major` version
+bumps back via an explicit `ignore` rule (see
+[`.github/dependabot.yml`](../.github/dependabot.yml)). Note that `update-types` inside a
+`groups` block only controls *batching* — on its own it does not stop Dependabot from
+opening individual PRs — so the top-level `ignore` rule is what actually defers majors.
+Majors are handled deliberately, on their own branch, because they can carry breaking
+changes into a published package. This is a stability posture, not an oversight.
 
 The majors currently held back, with the reason each is deferred:
 

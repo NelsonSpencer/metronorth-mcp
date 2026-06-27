@@ -24,6 +24,14 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # Major bumps are handled deliberately (see docs/dependency-upgrades.md),
+      # not via automated Dependabot PRs. update-types inside `groups` only
+      # controls batching, so this top-level ignore is what actually holds
+      # majors back.
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
     open-pull-requests-limit: 5
 
   - package-ecosystem: github-actions

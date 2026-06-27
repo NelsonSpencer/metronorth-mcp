@@ -4,7 +4,7 @@ All notable project changes are summarized here.
 
 ## 2.1.3 - 2026-06-27
 
-- Documented deferred major dependency upgrades and the Dependabot minor/patch-only scope in `docs/dependency-upgrades.md`.
+- Documented deferred major dependency upgrades and added a Dependabot `ignore` rule so major npm bumps are held back deliberately rather than auto-proposed (`.github/dependabot.yml`, `docs/dependency-upgrades.md`).
 - Added a native-install fallback note (use Node.js 22 or 24 LTS if a `better-sqlite3` build fails) to the README and SUPPORT docs.
 - Removed maintainer-internal `docs/` from the published npm tarball; they remain in the repository.
 - Added a private Code of Conduct reporting path.
