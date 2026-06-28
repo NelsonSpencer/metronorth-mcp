@@ -271,6 +271,26 @@ describe('HTTP routing', () => {
 
     expect(res.status).toBe(400);
   });
+
+  it('POST /mcp with an unknown session id returns 404 (not 400) so clients re-init', async () => {
+    const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${TEST_TOKEN}`,
+        'mcp-session-id': 'evicted-or-never-existed',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/list',
+        params: {},
+      }),
+    });
+
+    // 404 is the Streamable HTTP signal to start a fresh session.
+    expect(res.status).toBe(404);
+  });
 });
 
 describe('bearer-token authentication', () => {

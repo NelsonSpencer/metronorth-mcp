@@ -294,14 +294,23 @@ async function handleMcpPost(
     return;
   }
 
-  const existing = getSession(req, ctx.transports);
+  const sessionId = getSessionId(req);
+  const existing = sessionId ? ctx.transports.get(sessionId) : undefined;
   if (existing) {
     existing.lastActivity = Date.now();
     await existing.transport.handleRequest(req, res, body);
     return;
   }
 
-  // No session yet — only an `initialize` request may open one.
+  // A presented-but-unknown session id (evicted, closed, or never ours) → 404,
+  // which Streamable HTTP clients treat as the signal to start a fresh session;
+  // returning 400 here would leave them stuck after idle eviction or DELETE.
+  if (sessionId) {
+    sendJson(res, 404, { error: 'session_not_found' });
+    return;
+  }
+
+  // No session id at all — only an `initialize` request may open one.
   if (!isInitializeRequest(body)) {
     sendJson(res, 400, { error: 'invalid_session' });
     return;
@@ -355,12 +364,16 @@ async function handleMcpPost(
   }
 }
 
+function getSessionId(req: IncomingMessage): string | undefined {
+  const header = req.headers['mcp-session-id'];
+  return Array.isArray(header) ? header[0] : header;
+}
+
 function getSession(
   req: IncomingMessage,
   transports: Map<string, SessionEntry>
 ): SessionEntry | undefined {
-  const header = req.headers['mcp-session-id'];
-  const sessionId = Array.isArray(header) ? header[0] : header;
+  const sessionId = getSessionId(req);
   return sessionId ? transports.get(sessionId) : undefined;
 }
 
