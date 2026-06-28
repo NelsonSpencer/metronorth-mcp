@@ -35,7 +35,8 @@ const envSchema = z.object({
   GTFS_UPDATE_INTERVAL_HOURS: z.coerce.number().default(24),
   CACHE_TTL_SECONDS: z.coerce.number().default(300),
   // Opt-in HTTP transport (stdio remains the default). CLI flags override these.
-  MCP_HTTP: z.preprocess(envFlagToBoolean, z.boolean().default(false)),
+  // envFlagToBoolean always yields a boolean (unset -> false), so no Zod default is needed.
+  MCP_HTTP: z.preprocess(envFlagToBoolean, z.boolean()),
   MCP_HTTP_HOST: z.preprocess(emptyStringToUndefined, z.string().default('127.0.0.1')),
   MCP_HTTP_PORT: z.preprocess(
     emptyStringToUndefined,

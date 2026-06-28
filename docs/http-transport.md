@@ -37,7 +37,7 @@ CLI flags take precedence over the `MCP_HTTP*` environment variables.
 | `--port <port>`            | `MCP_HTTP_PORT`            | `8000`           | Listen port (integer `0`–`65535`).                           |
 | `--token <token>`          | `MCP_HTTP_TOKEN`           | unset            | Require `Authorization: Bearer <token>` on every `/mcp` call.|
 | `--allowed-hosts <list>`   | `MCP_HTTP_ALLOWED_HOSTS`   | loopback names   | Comma-separated `Host` allow-list (DNS-rebind protection).   |
-| `--allowed-origins <list>` | `MCP_HTTP_ALLOWED_ORIGINS` | unset            | Comma-separated `Origin` allow-list (DNS-rebind protection). |
+| `--allowed-origins <list>` | `MCP_HTTP_ALLOWED_ORIGINS` | loopback origins | Comma-separated `Origin` allow-list (DNS-rebind protection). |
 | `--help`                   | —                          | —                | Print usage and exit.                                        |
 
 Notes:
@@ -45,9 +45,10 @@ Notes:
 - `MCP_HTTP` is truthy for `1`, `true`, `yes`, or `on`.
 - `--allowed-hosts` / `--allowed-origins` accept a comma-separated list; blank entries are
   ignored. When `--allowed-hosts` is unset, the default allow-list is `127.0.0.1`,
-  `localhost`, `127.0.0.1:<port>`, and `localhost:<port>`.
-- `--allowed-origins` defaults to unset, because non-browser MCP clients often send no
-  `Origin` header.
+  `localhost`, `[::1]`, `127.0.0.1:<port>`, `localhost:<port>`, and `[::1]:<port>`.
+- `--allowed-origins` defaults to the loopback origins (`http://127.0.0.1:<port>`,
+  `http://localhost:<port>`, `http://[::1]:<port>`). The SDK only validates `Origin` when the
+  request actually includes one, so non-browser MCP clients that send no `Origin` still pass.
 
 ## Endpoints
 

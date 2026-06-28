@@ -76,6 +76,8 @@ interface ServerContext {
   allowedHosts: string[];
   allowedOrigins: string[];
   maxSessions: number;
+  /** In-flight `initialize` requests not yet inserted into `transports`. */
+  pendingSessions: number;
 }
 
 class BodyTooLargeError extends Error {}
@@ -127,6 +129,7 @@ export async function runHttp(opts: RunHttpOptions): Promise<RunHttpHandle> {
     allowedHosts: [],
     allowedOrigins: [],
     maxSessions,
+    pendingSessions: 0,
   };
 
   const httpServer = createServer((req, res) => {
@@ -152,7 +155,7 @@ export async function runHttp(opts: RunHttpOptions): Promise<RunHttpHandle> {
       const entry = transports.get(sessionId);
       if (entry) {
         transports.delete(sessionId);
-        void entry.transport.close();
+        void entry.transport.close().catch(() => {});
       }
     }
   }, sweepIntervalMs);
@@ -192,12 +195,15 @@ export async function runHttp(opts: RunHttpOptions): Promise<RunHttpHandle> {
   ctx.allowedHosts = opts.allowedHosts ?? [
     '127.0.0.1',
     'localhost',
+    '[::1]',
     `127.0.0.1:${boundPort}`,
     `localhost:${boundPort}`,
+    `[::1]:${boundPort}`,
   ];
   ctx.allowedOrigins = opts.allowedOrigins ?? [
     `http://127.0.0.1:${boundPort}`,
     `http://localhost:${boundPort}`,
+    `http://[::1]:${boundPort}`,
   ];
 
   logger.info(
@@ -301,32 +307,52 @@ async function handleMcpPost(
     return;
   }
 
-  // Bound the session map: refuse new sessions once the cap is reached.
-  if (ctx.transports.size >= ctx.maxSessions) {
+  // Bound the session map: refuse new sessions once the cap is reached. Count
+  // in-flight initializes too — a transport is not inserted into `transports`
+  // until `onsessioninitialized` fires after an await, so a size-only check
+  // would let concurrent initializes all slip past the ceiling.
+  if (ctx.transports.size + ctx.pendingSessions >= ctx.maxSessions) {
     sendJson(res, 503, { error: 'too_many_sessions' });
     return;
   }
 
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => randomUUID(),
-    enableDnsRebindingProtection: true,
-    allowedHosts: ctx.allowedHosts,
-    allowedOrigins: ctx.allowedOrigins,
-    onsessioninitialized: (sessionId: string) => {
-      ctx.transports.set(sessionId, { transport, lastActivity: Date.now() });
-    },
-  });
-
-  transport.onclose = () => {
-    const sessionId = transport.sessionId;
-    if (sessionId) {
-      ctx.transports.delete(sessionId);
+  // Reserve the slot synchronously (before the first await) and release it once
+  // the session is registered or the attempt fails. releaseSlot is idempotent,
+  // so the early release in onsessioninitialized and the finally never double-count.
+  ctx.pendingSessions += 1;
+  let slotReleased = false;
+  const releaseSlot = (): void => {
+    if (!slotReleased) {
+      slotReleased = true;
+      ctx.pendingSessions -= 1;
     }
   };
 
-  const server = createMcpServer();
-  await server.connect(transport);
-  await transport.handleRequest(req, res, body);
+  try {
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      enableDnsRebindingProtection: true,
+      allowedHosts: ctx.allowedHosts,
+      allowedOrigins: ctx.allowedOrigins,
+      onsessioninitialized: (sessionId: string) => {
+        ctx.transports.set(sessionId, { transport, lastActivity: Date.now() });
+        releaseSlot();
+      },
+    });
+
+    transport.onclose = () => {
+      const sessionId = transport.sessionId;
+      if (sessionId) {
+        ctx.transports.delete(sessionId);
+      }
+    };
+
+    const server = createMcpServer();
+    await server.connect(transport);
+    await transport.handleRequest(req, res, body);
+  } finally {
+    releaseSlot();
+  }
 }
 
 function getSession(
