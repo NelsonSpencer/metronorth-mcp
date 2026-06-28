@@ -52,9 +52,15 @@ function loadConfig() {
   const result = envSchema.safeParse(process.env);
 
   if (!result.success) {
-    console.error('Invalid environment configuration:', result.error.format());
-    // Return defaults for missing vars
-    return envSchema.parse({});
+    // Fail fast. Silently re-parsing `{}` would substitute all defaults and
+    // could, for example, drop an HTTP opt-in (`MCP_HTTP=1`) when an unrelated
+    // value like MCP_HTTP_PORT is invalid, booting stdio instead of failing the
+    // HTTP deployment. A bad value should stop startup, not change transports.
+    console.error(
+      'Invalid environment configuration:',
+      JSON.stringify(result.error.format(), null, 2)
+    );
+    process.exit(1);
   }
 
   return result.data;
