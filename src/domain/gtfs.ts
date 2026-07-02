@@ -42,6 +42,7 @@ export interface Trip {
   shape_id: string | null;
   wheelchair_accessible: number | null;
   bikes_allowed: number | null;
+  peak_offpeak: number | null;
 }
 
 export interface StopTime {
@@ -55,6 +56,26 @@ export interface StopTime {
   drop_off_type: number | null;
   shape_dist_traveled: number | null;
   timepoint: number | null;
+  track: string | null;
+  note_id: string | null;
+}
+
+export interface Transfer {
+  from_stop_id: string;
+  to_stop_id: string;
+  from_route_id: string | null;
+  to_route_id: string | null;
+  from_trip_id: string;
+  to_trip_id: string;
+  transfer_type: number;
+  min_transfer_time: number | null;
+}
+
+export interface TripNote {
+  note_id: string;
+  note_mark: string | null;
+  note_title: string | null;
+  note_desc: string | null;
 }
 
 export interface Calendar {

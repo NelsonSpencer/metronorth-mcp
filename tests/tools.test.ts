@@ -19,7 +19,10 @@ vi.mock('../src/infrastructure/database.js', () => ({
   runQuery: vi.fn(() => []),
   getMetadata: vi.fn(() => null),
   setMetadata: vi.fn(),
+  deleteMetadata: vi.fn(),
   transaction: vi.fn((fn: () => unknown) => fn()),
+  SCHEMA_VERSION: 2,
+  GTFS_FORCE_REFRESH_KEY: 'gtfs_force_refresh',
 }));
 
 vi.mock('../src/infrastructure/cache.js', () => ({

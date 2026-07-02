@@ -118,6 +118,8 @@ export const DB_TABLES = {
   stop_times: 'stop_times',
   calendar: 'calendar',
   calendar_dates: 'calendar_dates',
+  transfers: 'transfers',
+  notes: 'notes',
   agency: 'agency',
   realtime_updates: 'realtime_updates',
   metadata: 'metadata',
