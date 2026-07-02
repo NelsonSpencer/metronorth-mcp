@@ -1,6 +1,6 @@
 {
   "name": "metronorth-mcp",
-  "version": "2.1.4",
+  "version": "2.2.0",
   "description": "MCP server for Metro-North schedules, stations, service alerts, and real-time departures",
   "type": "module",
   "packageManager": "npm@11.4.1",
