@@ -75,13 +75,16 @@ describe("MetroNorthRealtime", () => {
     preparedQueries.length = 0;
   });
 
-  it("keeps service alerts for Metro-North routes 1 through 8, agency MNR, and system alerts", async () => {
+  it("keeps service alerts for Metro-North routes 1 through 6, agency MNR, and system alerts", async () => {
     decodeMock.mockReturnValue({
       entity: [
         alertEntity("route-4", [{ routeId: "4" }]),
-        alertEntity("route-8", [{ routeId: "8" }]),
+        alertEntity("route-6", [{ routeId: "6" }]),
         alertEntity("agency-mnr", [{ agencyId: "MNR" }]),
         alertEntity("system-wide", []),
+        // Route 8 is Port Jervis, a west-of-Hudson line operated by NJ Transit
+        // and absent from this server's data, so it is not treated as MNR.
+        alertEntity("west-of-hudson-8", [{ routeId: "8" }]),
         alertEntity("other-route", [{ routeId: "9" }]),
       ],
     });
@@ -94,7 +97,7 @@ describe("MetroNorthRealtime", () => {
 
     expect(alerts.map((alert) => alert.alert_id)).toEqual([
       "route-4",
-      "route-8",
+      "route-6",
       "agency-mnr",
       "system-wide",
     ]);

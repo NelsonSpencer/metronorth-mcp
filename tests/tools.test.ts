@@ -251,3 +251,59 @@ describe('Input Validation', () => {
     expect(result.content).toBeDefined();
   });
 });
+
+describe('West-of-Hudson coverage', () => {
+  const westOfHudsonLines = ['Pascack Valley', 'Port Jervis'];
+
+  for (const line of westOfHudsonLines) {
+    it(`rejects ${line} on get_route_schedule with a not_covered error`, async () => {
+      const result = await handleToolCall(
+        'get_route_schedule',
+        { route_name: line },
+        { requestId: `woh-schedule-${line}` }
+      );
+      const error = result.structuredContent?.error as Record<string, unknown>;
+
+      expect(result.isError).toBe(true);
+      expect(error.code).toBe('not_covered');
+      expect(error.message).toContain('NJ Transit');
+      expect(error.line).toBe(line);
+      expect(error.reference_url).toBe('https://www.njtransit.com/');
+      expect(result.content[0].text).toContain('NJ Transit');
+    });
+
+    it(`rejects ${line} on get_service_alerts with a not_covered error`, async () => {
+      const result = await handleToolCall(
+        'get_service_alerts',
+        { route_name: line },
+        { requestId: `woh-alerts-${line}` }
+      );
+      const error = result.structuredContent?.error as Record<string, unknown>;
+
+      expect(result.isError).toBe(true);
+      expect(error.code).toBe('not_covered');
+      expect(error.message).toContain('NJ Transit');
+      expect(error.line).toBe(line);
+    });
+  }
+
+  it('matches west-of-Hudson line names case-insensitively', async () => {
+    const result = await handleToolCall('get_route_schedule', {
+      route_name: 'pascack valley',
+    });
+    const error = result.structuredContent?.error as Record<string, unknown>;
+
+    expect(result.isError).toBe(true);
+    expect(error.code).toBe('not_covered');
+  });
+
+  it('leaves other unknown routes to the existing not_found behavior', async () => {
+    const result = await handleToolCall('get_route_schedule', {
+      route_name: 'Nonexistent Line',
+    });
+    const error = result.structuredContent?.error as Record<string, unknown>;
+
+    expect(result.isError).toBe(true);
+    expect(error.code).toBe('not_found');
+  });
+});

@@ -135,6 +135,44 @@ describe('MCP resources', () => {
     expect(normalize(resourcePayload)).toEqual(normalize(toolPayload));
   });
 
+  it('reads the routes resource with covered lines and west-of-Hudson honesty', async () => {
+    const result = await handleReadResource('metronorth://routes');
+    const payload = JSON.parse(result.contents[0].text) as {
+      routes: { route_id: string; route_name: string; covered: boolean }[];
+      west_of_hudson: {
+        route_name: string;
+        covered: boolean;
+        operated_by: string;
+        note: string;
+        reference_url: string;
+      }[];
+    };
+
+    expect(payload.routes).toHaveLength(6);
+    expect(payload.routes.map((route) => route.route_name)).toEqual([
+      'Hudson',
+      'Harlem',
+      'New Haven',
+      'New Canaan',
+      'Danbury',
+      'Waterbury',
+    ]);
+    expect(payload.routes.every((route) => route.covered === true)).toBe(true);
+    expect(payload.routes.map((route) => route.route_name)).not.toContain('Pascack Valley');
+    expect(payload.routes.map((route) => route.route_name)).not.toContain('Port Jervis');
+
+    expect(payload.west_of_hudson.map((line) => line.route_name)).toEqual([
+      'Pascack Valley',
+      'Port Jervis',
+    ]);
+    for (const line of payload.west_of_hudson) {
+      expect(line.covered).toBe(false);
+      expect(line.operated_by).toBe('NJ Transit');
+      expect(line.reference_url).toBe('https://www.njtransit.com/');
+      expect(line.note).toContain('NJ Transit');
+    }
+  });
+
   it('reads the stations and station detail resources', async () => {
     const stations = await handleReadResource('metronorth://stations');
     const stationList = JSON.parse(stations.contents[0].text);

@@ -76,6 +76,9 @@ export const GTFS_REALTIME_URL = 'https://api-endpoint.mta.info/Dataservice/mtag
 export const GTFS_ALERTS_URL = 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fall-alerts';
 
 // Metro-North Route Mappings
+// Only the six east-of-Hudson lines that exist in the MTA Metro-North GTFS feed
+// this server loads. The west-of-Hudson lines (Pascack Valley, Port Jervis) are
+// operated by NJ Transit and are absent from the feed; see WEST_OF_HUDSON_LINES.
 export const ROUTE_NAMES: Record<string, string> = {
   '1': 'Hudson',
   '2': 'Harlem',
@@ -83,8 +86,6 @@ export const ROUTE_NAMES: Record<string, string> = {
   '4': 'New Canaan',
   '5': 'Danbury',
   '6': 'Waterbury',
-  '7': 'Pascack Valley',
-  '8': 'Port Jervis',
 };
 
 export const ROUTE_IDS_BY_NAME: Record<string, string[]> = {
@@ -94,9 +95,35 @@ export const ROUTE_IDS_BY_NAME: Record<string, string[]> = {
   'new canaan': ['4'],
   danbury: ['5'],
   waterbury: ['6'],
-  'pascack valley': ['7'],
-  'port jervis': ['8'],
 };
+
+// Metro-North's two west-of-Hudson lines run west of the Hudson River and are
+// operated under contract by NJ Transit. They are not part of the MTA
+// Metro-North GTFS feed this server loads, so it cannot answer schedule or alert
+// questions for them. Surface them honestly and point riders to NJ Transit.
+export const NJ_TRANSIT_URL = 'https://www.njtransit.com/';
+
+export interface WestOfHudsonLine {
+  name: string;
+  operated_by: string;
+  note: string;
+  reference_url: string;
+}
+
+export const WEST_OF_HUDSON_LINES: WestOfHudsonLine[] = [
+  {
+    name: 'Pascack Valley',
+    operated_by: 'NJ Transit',
+    note: "West-of-Hudson Metro-North line operated by NJ Transit; not included in this server's data.",
+    reference_url: NJ_TRANSIT_URL,
+  },
+  {
+    name: 'Port Jervis',
+    operated_by: 'NJ Transit',
+    note: "West-of-Hudson Metro-North line operated by NJ Transit; not included in this server's data.",
+    reference_url: NJ_TRANSIT_URL,
+  },
+];
 
 // Major stations for reference
 export const MAJOR_STATIONS = [
