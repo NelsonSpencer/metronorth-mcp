@@ -164,6 +164,7 @@ describe('schema migration', () => {
       getDatabase,
       getMetadata,
       setMetadata,
+      deleteMetadata,
       closeDatabase,
       SCHEMA_VERSION,
       GTFS_FORCE_REFRESH_KEY,
@@ -175,14 +176,20 @@ describe('schema migration', () => {
     expect(getMetadata('schema_version')).toBe(String(SCHEMA_VERSION));
 
     // Pretend GTFS was ingested moments ago so the ONLY reason to refresh is the
-    // migration-forced flag; this isolates the "force once, then clear" contract
-    // from the normal time-based freshness check.
+    // migration-forced flag; this isolates the forced-refresh contract from the
+    // normal time-based freshness check.
     setMetadata('gtfs_last_update', new Date().toISOString());
 
     const loader = getGTFSLoader();
-    expect(await loader.needsUpdate()).toBe(true); // consumes the forced-refresh flag
-    expect(getMetadata(GTFS_FORCE_REFRESH_KEY)).toBeNull();
-    expect(await loader.needsUpdate()).toBe(false); // no forced-refresh loop
+    // The flag survives needsUpdate() so a failed download retries next boot;
+    // only a successful import (importToDatabase) clears it.
+    expect(await loader.needsUpdate()).toBe(true);
+    expect(getMetadata(GTFS_FORCE_REFRESH_KEY)).toBe('1');
+    expect(await loader.needsUpdate()).toBe(true); // still forced until import succeeds
+
+    // Simulate the successful-import clear, then the loop must end.
+    deleteMetadata(GTFS_FORCE_REFRESH_KEY);
+    expect(await loader.needsUpdate()).toBe(false);
 
     closeDatabase();
   });

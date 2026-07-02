@@ -87,9 +87,8 @@ describe('GTFSLoader import', () => {
   });
 
   it('parses and persists transfers, notes, and the new stop_times/trips columns', async () => {
-    const { getDatabase, getSqlite, closeDatabase } = await import(
-      '../src/infrastructure/database.js'
-    );
+    const { getDatabase, getSqlite, getMetadata, setMetadata, closeDatabase, GTFS_FORCE_REFRESH_KEY } =
+      await import('../src/infrastructure/database.js');
     const { getGTFSLoader } = await import('../src/infrastructure/gtfs-loader.js');
 
     getDatabase();
@@ -101,7 +100,10 @@ describe('GTFSLoader import', () => {
     expect(parsed.transfers).toHaveLength(1);
     expect(parsed.notes).toHaveLength(2);
 
+    // A successful import must consume any migration-forced refresh flag.
+    setMetadata(GTFS_FORCE_REFRESH_KEY, '1');
     await loader.importToDatabase(parsed);
+    expect(getMetadata(GTFS_FORCE_REFRESH_KEY)).toBeNull();
 
     const sqlite = getSqlite();
 

@@ -64,11 +64,11 @@ interface ParsedGTFS {
 
 export class GTFSLoader {
   async needsUpdate(): Promise<boolean> {
-    // A schema migration can force a one-time re-ingest so newly added columns
-    // and tables get populated. Consume the flag once, then fall through to the
-    // normal time-based freshness check on subsequent calls.
+    // A schema migration can force a re-ingest so newly added columns and
+    // tables get populated. The flag is cleared only after a successful import
+    // (see importToDatabase), so a transient download failure retries on the
+    // next startup instead of silently leaving the new columns empty.
     if (getMetadata(GTFS_FORCE_REFRESH_KEY)) {
-      deleteMetadata(GTFS_FORCE_REFRESH_KEY);
       return true;
     }
 
@@ -381,11 +381,15 @@ export class GTFSLoader {
       }
     });
 
-    // Update metadata
+    // Update metadata. Clearing the force-refresh flag here (after the import
+    // transaction committed) makes the migration-forced refresh "once, until it
+    // works": failures before this point leave the flag set so the next
+    // startup retries, and the manual gtfs:update path consumes it too.
     setMetadata('gtfs_last_update', new Date().toISOString());
     setMetadata('gtfs_stops_count', String(data.stops.length));
     setMetadata('gtfs_trips_count', String(data.trips.length));
     setMetadata('gtfs_transfers_count', String(data.transfers.length));
+    deleteMetadata(GTFS_FORCE_REFRESH_KEY);
 
     logger.info(
       {
