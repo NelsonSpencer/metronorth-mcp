@@ -15,6 +15,7 @@ export type ScheduleServiceLike = Pick<
   | 'getRouteSchedule'
   | 'getStationPairSchedule'
   | 'getFirstLastTrains'
+  | 'getTransferItineraries'
 >;
 
 export type StationServiceLike = Pick<

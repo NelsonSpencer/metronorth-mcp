@@ -9,6 +9,7 @@ import {
   PlanMetroNorthTripSchema,
   SearchStationsSchema,
   type StationPairTrip,
+  type TransferItinerary,
 } from '../domain/gtfs.js';
 import { getMetroNorthServiceContext } from '../domain/transit-time.js';
 import { ROUTE_IDS_BY_NAME, WEST_OF_HUDSON_LINES } from '../config.js';
@@ -246,6 +247,12 @@ async function handleGetSystemStatus(_args: Record<string, unknown>, context: To
   });
 }
 
+// A direct trip option inside a trip plan, tagged so consumers can tell it apart
+// from a one-transfer itinerary (which carries itinerary_type: 'one_transfer').
+function formatDirectOption(trip: StationPairTrip) {
+  return { itinerary_type: 'direct' as const, ...formatStationPairTrip(trip) };
+}
+
 function formatStationPairTrip(trip: StationPairTrip) {
   return {
     trip_id: trip.trip_id,
@@ -301,7 +308,7 @@ async function handleGetStationPairSchedule(args: Record<string, unknown>, conte
       `No direct trains found from "${origin_station}" to "${destination_station}"`,
       {
         suggestion:
-          'Use search_stations to verify station names. Transfer planning is not included in this tool.',
+          'Use search_stations to verify station names, or plan_metro_north_trip for itineraries that include a transfer.',
       }
     );
   }
@@ -354,7 +361,7 @@ async function handlePlanMetroNorthTrip(args: Record<string, unknown>, context: 
     include_alerts,
   } = parseArgs(PlanMetroNorthTripSchema, args);
   const serviceDate = date || getMetroNorthServiceContext().serviceDate;
-  const options = await context.scheduleService.getStationPairSchedule(
+  const directOptions = await context.scheduleService.getStationPairSchedule(
     origin_station,
     destination_station,
     {
@@ -365,29 +372,57 @@ async function handlePlanMetroNorthTrip(args: Record<string, unknown>, context: 
     }
   );
 
-  if (options.length === 0) {
+  // Only reach for transfers when direct trains don't already fill the request.
+  // Grand Central <-> mainline pairs fill instantly, so this short-circuits the
+  // heavier transfers query for the common case.
+  let transferOptions: TransferItinerary[] = [];
+  if (limit === undefined || directOptions.length < limit) {
+    transferOptions = await context.scheduleService.getTransferItineraries(
+      origin_station,
+      destination_station,
+      {
+        date: serviceDate,
+        departAfter: depart_after,
+        limit,
+        includeRealtime: include_realtime,
+      }
+    );
+  }
+
+  if (directOptions.length === 0 && transferOptions.length === 0) {
     throw new ToolDomainError(
       'not_found',
-      `No direct trip options found from "${origin_station}" to "${destination_station}"`,
+      `No direct or one-transfer trip options found from "${origin_station}" to "${destination_station}"`,
       {
         suggestion:
-          'Use search_stations to verify station names. Transfer planning is not included in this tool.',
+          'Use search_stations to verify station names. This planner covers direct trains and one-transfer itineraries via the MTA\'s guaranteed connections at hub stations; trips needing two or more transfers are not supported.',
       }
     );
   }
 
   const status = await handleGetSystemStatus({}, context);
+  // Alerts consider every leg's route (direct trips and both legs of each transfer).
+  const alertTrips = [...directOptions, ...transferOptions.flatMap((itinerary) => itinerary.legs)];
   const alerts = include_alerts
-    ? await getRelevantTripAlerts(options, origin_station, destination_station, context)
+    ? await getRelevantTripAlerts(alertTrips, origin_station, destination_station, context)
     : [];
+
+  // When at least one direct train exists it stays the recommendation and its
+  // peers are the alternates; transfers are surfaced separately. When no direct
+  // train exists, the best transfer itinerary becomes the recommendation.
+  const directPlanOptions = directOptions.map(formatDirectOption);
+  const hasDirect = directPlanOptions.length > 0;
+  const recommendedOption = hasDirect ? directPlanOptions[0] : (transferOptions[0] ?? null);
+  const alternateOptions = hasDirect ? directPlanOptions.slice(1) : transferOptions.slice(1);
 
   return {
     origin: origin_station,
     destination: destination_station,
     service_date: serviceDate,
     depart_after: depart_after || null,
-    recommended_option: formatStationPairTrip(options[0]),
-    alternate_options: options.slice(1).map(formatStationPairTrip),
+    recommended_option: recommendedOption,
+    alternate_options: alternateOptions,
+    transfer_options: transferOptions,
     alerts,
     data_freshness: status.gtfs_data,
     realtime: {

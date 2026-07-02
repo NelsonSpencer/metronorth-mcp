@@ -601,6 +601,32 @@ export interface FirstLastTrains {
   total_direct_trips: number;
 }
 
+// A same-station timed transfer between the two legs of a one-transfer
+// itinerary. `arrive`/`depart` are the display-formatted platform times at the
+// hub and `wait_minutes` is the scheduled gap between them. `guaranteed` is true
+// for GTFS transfer_type = 1 (a timed connection the MTA holds), which is the
+// only kind Metro-North publishes.
+export interface TransferConnection {
+  station: string;
+  arrive: string;
+  depart: string;
+  wait_minutes: number;
+  guaranteed: boolean;
+}
+
+// A one-transfer trip option: two direct legs joined at a hub station. Each leg
+// reuses StationPairTrip so realtime delays, tracks, and notes surface per leg.
+// `total_duration_minutes` spans leg-1 boarding to leg-2 arrival. `connection_at_risk`
+// is set when leg-1's realtime delay is at least the scheduled transfer wait, i.e.
+// the arriving train may miss the connection.
+export interface TransferItinerary {
+  itinerary_type: 'one_transfer';
+  legs: [StationPairTrip, StationPairTrip];
+  transfer: TransferConnection;
+  total_duration_minutes: number;
+  connection_at_risk: boolean;
+}
+
 // Type exports for schema inference
 export type GetDeparturesInput = z.infer<typeof GetDeparturesSchema>;
 export type GetRouteScheduleInput = z.infer<typeof GetRouteScheduleSchema>;
