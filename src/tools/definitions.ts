@@ -76,4 +76,12 @@ export const toolDefinitions = [
     inputSchema: ToolInputSchemas.plan_metro_north_trip,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
+  {
+    name: 'get_accessibility_status',
+    title: 'Get Accessibility Status',
+    description:
+      "Report Metro-North elevator, escalator, and accessibility alerts, optionally for a single station (which also returns that station's static wheelchair-accessible flag). The MTA publishes no machine-readable Metro-North elevator/escalator feed, so results are derived from free-text service alerts and may be incomplete; see the MTA elevator & escalator status page.",
+    inputSchema: ToolInputSchemas.get_accessibility_status,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
 ] satisfies Tool[];

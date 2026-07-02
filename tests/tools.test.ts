@@ -43,7 +43,7 @@ describe('Tool Definitions', () => {
   it('should have all required tools', () => {
     const toolNames = toolDefinitions.map((t) => t.name);
 
-    expect(toolDefinitions).toHaveLength(10);
+    expect(toolDefinitions).toHaveLength(11);
     expect(toolNames).toEqual([
       'get_departures',
       'get_trip_details',
@@ -55,6 +55,7 @@ describe('Tool Definitions', () => {
       'get_station_pair_schedule',
       'get_first_last_trains',
       'plan_metro_north_trip',
+      'get_accessibility_status',
     ]);
   });
 

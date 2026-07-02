@@ -1,4 +1,5 @@
 import {
+  GetAccessibilityStatusSchema,
   GetDeparturesSchema,
   GetRouteScheduleSchema,
   GetServiceAlertsSchema,
@@ -8,6 +9,7 @@ import {
   GetFirstLastTrainsSchema,
   PlanMetroNorthTripSchema,
   SearchStationsSchema,
+  type ServiceAlert,
   type StationPairTrip,
   type TransferItinerary,
 } from '../domain/gtfs.js';
@@ -34,7 +36,29 @@ export const toolHandlers: Record<string, ToolHandler> = {
   get_station_pair_schedule: handleGetStationPairSchedule,
   get_first_last_trains: handleGetFirstLastTrains,
   plan_metro_north_trip: handlePlanMetroNorthTrip,
+  get_accessibility_status: handleGetAccessibilityStatus,
 } satisfies Record<string, ToolHandler>;
+
+// Matches alert text that describes an elevator/escalator/accessibility condition.
+// The MTA all-alerts feed carries these as free text (no dedicated MNR
+// elevator/escalator feed exists), so this is the primary detection path.
+const ACCESSIBILITY_KEYWORDS = /elevator|escalator|accessib|ADA|wheelchair|lift/i;
+
+// The GTFS-RT `Alert.effect` value the feed uses for accessibility disruptions.
+// Matched in addition to the keyword scan so a correctly-tagged alert is caught
+// even if its text avoids the keywords above.
+const ACCESSIBILITY_EFFECT = 'ACCESSIBILITY_ISSUE';
+
+const ACCESSIBILITY_STATUS_PAGE = 'https://new.mta.info/elevator-escalator-status';
+
+const ACCESSIBILITY_DATA_CAVEAT =
+  'The MTA publishes no machine-readable Metro-North elevator/escalator outage feed, so this is derived from free-text service alerts and may be incomplete. Check the MTA elevator & escalator status page for authoritative outage information.';
+
+function isAccessibilityAlert(alert: ServiceAlert): boolean {
+  if (alert.effect === ACCESSIBILITY_EFFECT) return true;
+  const haystack = `${alert.header_text} ${alert.description_text ?? ''}`;
+  return ACCESSIBILITY_KEYWORDS.test(haystack);
+}
 
 /**
  * Metro-North's west-of-Hudson lines (Pascack Valley, Port Jervis) are operated
@@ -468,4 +492,59 @@ async function getRelevantTripAlerts(
       cause: alert.cause,
       effect: alert.effect,
     }));
+}
+
+async function handleGetAccessibilityStatus(args: Record<string, unknown>, context: ToolContext) {
+  const { station_name } = parseArgs(GetAccessibilityStatusSchema, args);
+  const alerts = await context.realtimeClient.getServiceAlerts();
+
+  let accessibilityAlerts = alerts.filter(isAccessibilityAlert);
+  let station = null;
+
+  if (station_name) {
+    const info = await context.stationService.getStationInfo(station_name);
+    if (!info) {
+      throw new ToolDomainError('not_found', `Station "${station_name}" not found`, {
+        suggestion: 'Use search_stations to find the correct station name',
+      });
+    }
+
+    // Narrow to alerts that mention the resolved (canonical) station name in their
+    // header or description. The all-alerts feed rarely populates a stop_id for
+    // MNR accessibility alerts, so a text match on the station name is the reliable
+    // signal here.
+    const needle = info.name.toLowerCase();
+    accessibilityAlerts = accessibilityAlerts.filter((alert) =>
+      `${alert.header_text} ${alert.description_text ?? ''}`.toLowerCase().includes(needle)
+    );
+
+    station = {
+      id: info.stop_id,
+      name: info.name,
+      location: {
+        latitude: info.latitude,
+        longitude: info.longitude,
+      },
+      zone: info.zone_id,
+      routes: info.routes,
+      wheelchair_accessible: info.wheelchair_accessible,
+    };
+  }
+
+  return {
+    station,
+    accessibility_alerts: accessibilityAlerts.map((alert) => ({
+      id: alert.alert_id,
+      header: alert.header_text,
+      description: alert.description_text,
+      cause: alert.cause,
+      effect: alert.effect,
+      affected_routes: alert.informed_entities
+        .filter((e) => e.route_id)
+        .map((e) => e.route_id),
+    })),
+    total: accessibilityAlerts.length,
+    data_caveat: ACCESSIBILITY_DATA_CAVEAT,
+    status_page: ACCESSIBILITY_STATUS_PAGE,
+  };
 }

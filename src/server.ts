@@ -2,6 +2,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   CallToolRequestSchema,
+  CompleteRequestSchema,
   GetPromptRequestSchema,
   ListToolsRequestSchema,
   ListPromptsRequestSchema,
@@ -13,6 +14,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { toolDefinitions, handleToolCall, createRequestContext } from './tools/index.js';
 import { promptDefinitions, handleGetPrompt } from './prompts.js';
+import { handleCompletion } from './completions.js';
 import {
   handleReadResource,
   resourceDefinitions,
@@ -39,6 +41,7 @@ export function createMcpServer(): Server {
       tools: {},
       resources: {},
       prompts: {},
+      completions: {},
     },
   });
 
@@ -79,6 +82,12 @@ function setupHandlers(server: Server): void {
 
   server.setRequestHandler(GetPromptRequestSchema, async (request) => {
     return handleGetPrompt(request.params.name, request.params.arguments || {});
+  });
+
+  // Argument autocompletion for the station resource template and station/route
+  // prompt arguments.
+  server.setRequestHandler(CompleteRequestSchema, async (request) => {
+    return handleCompletion(request.params);
   });
 
   // Handle tool calls

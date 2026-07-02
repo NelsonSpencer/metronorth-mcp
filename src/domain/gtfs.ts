@@ -296,6 +296,16 @@ export const PlanMetroNorthTripSchema = z.object({
     .describe('Include current service alerts for matching routes and stations'),
 });
 
+export const GetAccessibilityStatusSchema = z.object({
+  station_name: z
+    .string()
+    .min(2)
+    .optional()
+    .describe(
+      'Optional station name. When provided, alerts are narrowed to that station and its static wheelchair-accessible flag is included.'
+    ),
+});
+
 type JsonSchemaProperty = {
   type: string;
   description?: string;
@@ -476,6 +486,14 @@ export const ToolInputSchemas = {
     },
     required: ['origin_station', 'destination_station'],
   },
+  get_accessibility_status: {
+    type: 'object',
+    properties: {
+      station_name: stringProperty(
+        'Optional station name. When provided, alerts are narrowed to that station and its static wheelchair-accessible flag is included.'
+      ),
+    },
+  },
 } satisfies Record<string, JsonObjectSchema>;
 
 // ============================================================================
@@ -627,6 +645,30 @@ export interface TransferItinerary {
   connection_at_risk: boolean;
 }
 
+// A single accessibility-relevant service alert, shaped like the get_service_alerts
+// output. Derived from the free-text all-alerts feed (see AccessibilityStatus).
+export interface AccessibilityAlert {
+  id: string;
+  header: string;
+  description: string | null;
+  cause: string | null;
+  effect: string | null;
+  affected_routes: string[];
+}
+
+// Elevator/escalator/accessibility status. `station` is populated (with the
+// static wheelchair-accessible flag) only when a station name is supplied; alerts
+// are then narrowed to that station. `data_caveat` states that the MTA publishes
+// no machine-readable Metro-North elevator/escalator feed, so this is derived from
+// text alerts and may be incomplete; `status_page` links the authoritative page.
+export interface AccessibilityStatus {
+  station: StationInfo | null;
+  accessibility_alerts: AccessibilityAlert[];
+  total: number;
+  data_caveat: string;
+  status_page: string;
+}
+
 // Type exports for schema inference
 export type GetDeparturesInput = z.infer<typeof GetDeparturesSchema>;
 export type GetRouteScheduleInput = z.infer<typeof GetRouteScheduleSchema>;
@@ -637,3 +679,4 @@ export type GetStationInfoInput = z.infer<typeof GetStationInfoSchema>;
 export type GetStationPairScheduleInput = z.infer<typeof GetStationPairScheduleSchema>;
 export type GetFirstLastTrainsInput = z.infer<typeof GetFirstLastTrainsSchema>;
 export type PlanMetroNorthTripInput = z.infer<typeof PlanMetroNorthTripSchema>;
+export type GetAccessibilityStatusInput = z.infer<typeof GetAccessibilityStatusSchema>;

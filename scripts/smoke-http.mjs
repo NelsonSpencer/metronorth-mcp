@@ -241,8 +241,8 @@ async function main() {
     const resourceTemplates = await client.listResourceTemplates();
     const prompts = await client.listPrompts();
 
-    if (tools.tools.length !== 10) {
-      throw new Error(`Expected 10 tools, got ${tools.tools.length}: ${tools.tools.map((t) => t.name).join(', ')}`);
+    if (tools.tools.length !== 11) {
+      throw new Error(`Expected 11 tools, got ${tools.tools.length}: ${tools.tools.map((t) => t.name).join(', ')}`);
     }
     if (resources.resources.length !== 5) {
       throw new Error(`Expected 5 resources, got ${resources.resources.length}`);
