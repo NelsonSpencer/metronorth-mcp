@@ -9,6 +9,7 @@ import type {
   FirstLastTrains,
   StationPairTrip,
   StopNote,
+  TransferItinerary,
   TripDetails,
   TripStop,
 } from '../domain/gtfs.js';
@@ -132,6 +133,112 @@ interface StationPairRow {
   origin_note_mark: string | null;
   origin_note_title: string | null;
   origin_note_desc: string | null;
+}
+
+// One candidate one-transfer itinerary as joined from the transfers table. Holds
+// both legs' columns (leg1 = origin -> hub on the arriving trip, leg2 = hub ->
+// destination on the connecting trip) plus the hub/transfer metadata so each leg
+// can be rebuilt into a StationPairRow and reuse the existing mapping/realtime
+// enrichment path. The `hub_*` columns describe the shared transfer station.
+interface TransferItineraryRow {
+  // Leg 1: the arriving trip (origin -> hub).
+  leg1_trip_id: string;
+  leg1_trip_short_name: string | null;
+  leg1_route_id: string;
+  leg1_route_long_name: string;
+  leg1_trip_headsign: string | null;
+  leg1_direction_id: number | null;
+  leg1_service_id: string;
+  leg1_peak_offpeak: number | null;
+  origin_stop_id: string;
+  origin_stop_name: string;
+  origin_departure_time: string;
+  origin_sequence: number;
+  origin_track: string | null;
+  origin_note_mark: string | null;
+  origin_note_title: string | null;
+  origin_note_desc: string | null;
+  // Transfer hub (from_stop_id == to_stop_id for every Metro-North transfer).
+  hub_stop_id: string;
+  hub_stop_name: string;
+  hub_arrival_time: string;
+  hub_arrival_sequence: number;
+  hub_departure_time: string;
+  hub_departure_sequence: number;
+  hub_track: string | null;
+  hub_note_mark: string | null;
+  hub_note_title: string | null;
+  hub_note_desc: string | null;
+  transfer_type: number;
+  // Leg 2: the connecting trip (hub -> destination).
+  leg2_trip_id: string;
+  leg2_trip_short_name: string | null;
+  leg2_route_id: string;
+  leg2_route_long_name: string;
+  leg2_trip_headsign: string | null;
+  leg2_direction_id: number | null;
+  leg2_service_id: string;
+  leg2_peak_offpeak: number | null;
+  destination_stop_id: string;
+  destination_stop_name: string;
+  destination_arrival_time: string;
+  destination_sequence: number;
+}
+
+// Project one leg of a transfer candidate onto the StationPairRow shape so it can
+// flow through mapStationPairRows unchanged. Leg 1 runs origin -> hub; leg 2 runs
+// hub -> destination, so the hub acts as each leg's destination/origin respectively.
+function transferLegToStationPairRow(
+  row: TransferItineraryRow,
+  leg: 'leg1' | 'leg2'
+): StationPairRow {
+  if (leg === 'leg1') {
+    return {
+      trip_id: row.leg1_trip_id,
+      trip_short_name: row.leg1_trip_short_name,
+      route_id: row.leg1_route_id,
+      route_long_name: row.leg1_route_long_name,
+      trip_headsign: row.leg1_trip_headsign,
+      direction_id: row.leg1_direction_id,
+      origin_stop_id: row.origin_stop_id,
+      origin_stop_name: row.origin_stop_name,
+      destination_stop_id: row.hub_stop_id,
+      destination_stop_name: row.hub_stop_name,
+      origin_departure_time: row.origin_departure_time,
+      destination_arrival_time: row.hub_arrival_time,
+      origin_sequence: row.origin_sequence,
+      destination_sequence: row.hub_arrival_sequence,
+      service_id: row.leg1_service_id,
+      origin_track: row.origin_track,
+      peak_offpeak: row.leg1_peak_offpeak,
+      origin_note_mark: row.origin_note_mark,
+      origin_note_title: row.origin_note_title,
+      origin_note_desc: row.origin_note_desc,
+    };
+  }
+
+  return {
+    trip_id: row.leg2_trip_id,
+    trip_short_name: row.leg2_trip_short_name,
+    route_id: row.leg2_route_id,
+    route_long_name: row.leg2_route_long_name,
+    trip_headsign: row.leg2_trip_headsign,
+    direction_id: row.leg2_direction_id,
+    origin_stop_id: row.hub_stop_id,
+    origin_stop_name: row.hub_stop_name,
+    destination_stop_id: row.destination_stop_id,
+    destination_stop_name: row.destination_stop_name,
+    origin_departure_time: row.hub_departure_time,
+    destination_arrival_time: row.destination_arrival_time,
+    origin_sequence: row.hub_departure_sequence,
+    destination_sequence: row.destination_sequence,
+    service_id: row.leg2_service_id,
+    origin_track: row.hub_track,
+    peak_offpeak: row.leg2_peak_offpeak,
+    origin_note_mark: row.hub_note_mark,
+    origin_note_title: row.hub_note_title,
+    origin_note_desc: row.hub_note_desc,
+  };
 }
 
 type StationPairScheduleOptions = {
@@ -677,6 +784,195 @@ export class ScheduleService {
     }
 
     return sqlite.prepare(query).all(...params) as StationPairRow[];
+  }
+
+  /**
+   * Find one-transfer itineraries between two stations using the MTA's timed
+   * (guaranteed) trip-to-trip transfers at hub stations. Mirrors
+   * getStationPairSchedule's service-date/serviceIds handling and GTFS
+   * string-time conventions. Each returned itinerary carries two StationPairTrip
+   * legs (enriched with realtime in a single pass) plus the transfer window.
+   */
+  async getTransferItineraries(
+    originStationName: string,
+    destinationStationName: string,
+    options: StationPairScheduleOptions = {}
+  ): Promise<TransferItinerary[]> {
+    const stationService = getStationService();
+    const [originStation, destinationStation] = await Promise.all([
+      stationService.findStationByName(originStationName),
+      stationService.findStationByName(destinationStationName),
+    ]);
+
+    if (!originStation || !destinationStation) {
+      logger.warn({ originStationName, destinationStationName }, 'Station pair not found');
+      return [];
+    }
+
+    const serviceDate = options.date || getMetroNorthServiceContext().serviceDate;
+    const serviceIds = this.getActiveServiceIds(serviceDate);
+    if (serviceIds.length === 0) return [];
+
+    const departAfter = normalizeGtfsTimeInput(
+      options.departAfter || getDefaultDepartAfter(options.date)
+    );
+    const limit = options.limit || 5;
+
+    const rows = this.getTransferItineraryRows(
+      originStation.stop_id,
+      destinationStation.stop_id,
+      serviceIds,
+      { departAfter, limit }
+    );
+    if (rows.length === 0) return [];
+
+    // Flatten both legs of every candidate into one StationPairRow[] so the shared
+    // mapping + realtime enrichment runs once (a single realtime fetch) and applies
+    // per leg. Legs stay paired by their interleaved order (leg1, leg2, leg1, ...).
+    const legRows: StationPairRow[] = [];
+    for (const row of rows) {
+      legRows.push(transferLegToStationPairRow(row, 'leg1'));
+      legRows.push(transferLegToStationPairRow(row, 'leg2'));
+    }
+    const mappedLegs = await this.mapStationPairRows(legRows, options.includeRealtime ?? true);
+
+    const itineraries: TransferItinerary[] = [];
+    for (let i = 0; i < rows.length; i += 1) {
+      const row = rows[i];
+      const leg1 = mappedLegs[i * 2];
+      const leg2 = mappedLegs[i * 2 + 1];
+
+      const waitMinutes = Math.round(
+        (parseGtfsTime(row.hub_departure_time) - parseGtfsTime(row.hub_arrival_time)) / 60
+      );
+      const totalDurationMinutes = Math.round(
+        (parseGtfsTime(row.destination_arrival_time) - parseGtfsTime(row.origin_departure_time)) / 60
+      );
+      // The delay that decides whether the scheduled transfer window survives is
+      // leg 1's arrival delay at the hub; fall back to its boarding delay when the
+      // hub has no realtime data yet, and to 0 (on time) when there is none at all.
+      const leg1Delay = leg1.destination_delay_minutes ?? leg1.origin_delay_minutes ?? 0;
+
+      itineraries.push({
+        itinerary_type: 'one_transfer',
+        legs: [leg1, leg2],
+        transfer: {
+          station: row.hub_stop_name,
+          arrive: formatGtfsTimeForDisplay(row.hub_arrival_time),
+          depart: formatGtfsTimeForDisplay(row.hub_departure_time),
+          wait_minutes: waitMinutes,
+          guaranteed: row.transfer_type === 1,
+        },
+        total_duration_minutes: totalDurationMinutes,
+        connection_at_risk: leg1Delay >= waitMinutes,
+      });
+    }
+
+    return itineraries;
+  }
+
+  private getTransferItineraryRows(
+    originStopId: string,
+    destinationStopId: string,
+    serviceIds: string[],
+    options: { departAfter?: string; limit?: number } = {}
+  ): TransferItineraryRow[] {
+    const sqlite = getSqlite();
+    const servicePlaceholders = serviceIds.map(() => '?').join(',');
+    const departAfterFilter = options.departAfter ? 'AND o.departure_time >= ?' : '';
+    const limitClause = options.limit ? 'LIMIT ?' : '';
+
+    // transfers is trip-to-trip and same-station (from_stop_id == to_stop_id), so
+    // the joins pin leg 1 to the arriving trip (origin -> hub) and leg 2 to the
+    // connecting trip (hub -> destination). Sequence guards keep each leg forward
+    // in time; the NOT EXISTS drops itineraries where the arriving train itself
+    // continues to the destination (a same-train ride beats a needless transfer).
+    const query = `
+      SELECT
+        t1.trip_id AS leg1_trip_id,
+        t1.trip_short_name AS leg1_trip_short_name,
+        t1.route_id AS leg1_route_id,
+        r1.route_long_name AS leg1_route_long_name,
+        t1.trip_headsign AS leg1_trip_headsign,
+        t1.direction_id AS leg1_direction_id,
+        t1.service_id AS leg1_service_id,
+        t1.peak_offpeak AS leg1_peak_offpeak,
+        o.stop_id AS origin_stop_id,
+        origin_stop.stop_name AS origin_stop_name,
+        o.departure_time AS origin_departure_time,
+        o.stop_sequence AS origin_sequence,
+        o.track AS origin_track,
+        origin_note.note_mark AS origin_note_mark,
+        origin_note.note_title AS origin_note_title,
+        origin_note.note_desc AS origin_note_desc,
+        x.from_stop_id AS hub_stop_id,
+        hub_stop.stop_name AS hub_stop_name,
+        xa.arrival_time AS hub_arrival_time,
+        xa.stop_sequence AS hub_arrival_sequence,
+        xd.departure_time AS hub_departure_time,
+        xd.stop_sequence AS hub_departure_sequence,
+        xd.track AS hub_track,
+        hub_note.note_mark AS hub_note_mark,
+        hub_note.note_title AS hub_note_title,
+        hub_note.note_desc AS hub_note_desc,
+        x.transfer_type AS transfer_type,
+        t2.trip_id AS leg2_trip_id,
+        t2.trip_short_name AS leg2_trip_short_name,
+        t2.route_id AS leg2_route_id,
+        r2.route_long_name AS leg2_route_long_name,
+        t2.trip_headsign AS leg2_trip_headsign,
+        t2.direction_id AS leg2_direction_id,
+        t2.service_id AS leg2_service_id,
+        t2.peak_offpeak AS leg2_peak_offpeak,
+        d.stop_id AS destination_stop_id,
+        destination_stop.stop_name AS destination_stop_name,
+        d.arrival_time AS destination_arrival_time,
+        d.stop_sequence AS destination_sequence
+      FROM transfers x
+      JOIN trips t1 ON t1.trip_id = x.from_trip_id
+      JOIN trips t2 ON t2.trip_id = x.to_trip_id
+      JOIN routes r1 ON r1.route_id = t1.route_id
+      JOIN routes r2 ON r2.route_id = t2.route_id
+      JOIN stop_times o  ON o.trip_id  = t1.trip_id AND o.stop_id  = ?
+      JOIN stop_times xa ON xa.trip_id = t1.trip_id AND xa.stop_id = x.from_stop_id
+                         AND xa.stop_sequence > o.stop_sequence
+      JOIN stop_times xd ON xd.trip_id = t2.trip_id AND xd.stop_id = x.to_stop_id
+      JOIN stop_times d  ON d.trip_id  = t2.trip_id AND d.stop_id  = ?
+                         AND d.stop_sequence > xd.stop_sequence
+      JOIN stops origin_stop ON origin_stop.stop_id = o.stop_id
+      JOIN stops hub_stop ON hub_stop.stop_id = x.from_stop_id
+      JOIN stops destination_stop ON destination_stop.stop_id = d.stop_id
+      LEFT JOIN notes origin_note ON origin_note.note_id = o.note_id
+      LEFT JOIN notes hub_note ON hub_note.note_id = xd.note_id
+      WHERE t1.service_id IN (${servicePlaceholders})
+        AND t2.service_id IN (${servicePlaceholders})
+        ${departAfterFilter}
+        AND xd.departure_time >= xa.arrival_time
+        AND NOT EXISTS (
+          SELECT 1 FROM stop_times same_trip
+          WHERE same_trip.trip_id = t1.trip_id
+            AND same_trip.stop_id = ?
+            AND same_trip.stop_sequence > o.stop_sequence
+        )
+      ORDER BY d.arrival_time ASC
+      ${limitClause}
+    `;
+
+    const params: Array<string | number> = [
+      originStopId,
+      destinationStopId,
+      ...serviceIds,
+      ...serviceIds,
+    ];
+    if (options.departAfter) {
+      params.push(options.departAfter);
+    }
+    params.push(destinationStopId);
+    if (options.limit) {
+      params.push(options.limit);
+    }
+
+    return sqlite.prepare(query).all(...params) as TransferItineraryRow[];
   }
 
   private countStationPairTrips(

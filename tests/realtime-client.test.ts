@@ -48,6 +48,7 @@ function alertEntity(
   informedEntity?: Array<{
     agencyId?: string;
     routeId?: string;
+    routeType?: number;
     stopId?: string;
   }>,
 ) {
@@ -75,17 +76,36 @@ describe("MetroNorthRealtime", () => {
     preparedQueries.length = 0;
   });
 
-  it("keeps service alerts for Metro-North routes 1 through 6, agency MNR, and system alerts", async () => {
+  it("scopes service alerts to Metro-North by agency/route_type, not a bare route id", async () => {
     decodeMock.mockReturnValue({
       entity: [
-        alertEntity("route-4", [{ routeId: "4" }]),
-        alertEntity("route-6", [{ routeId: "6" }]),
+        // Agency 'MNR' is authoritative and passes outright.
         alertEntity("agency-mnr", [{ agencyId: "MNR" }]),
+        // Agency 'MNR' plus a genuine MNR stop entity (the New Rochelle
+        // elevator alert shape observed live).
+        alertEntity("mnr-elevator", [
+          { agencyId: "MNR", routeId: "3", stopId: "108" },
+        ]),
+        // No agency tagged: fall back to the route id (legacy feeds).
+        alertEntity("route-4-no-agency", [{ routeId: "4" }]),
+        // No agency but route_type says rail (GTFS route_type 2) -> MNR.
+        alertEntity("route-1-rail", [{ routeId: "1", routeType: 2 }]),
+        // Alerts with no informed entity are system-wide and pass through.
         alertEntity("system-wide", []),
-        // Route 8 is Port Jervis, a west-of-Hudson line operated by NJ Transit
-        // and absent from this server's data, so it is not treated as MNR.
+
+        // --- Regression: NYC subway lines 1-6 collide with MNR route ids ---
+        // Subway entity tagged with the subway agency must be REJECTED even
+        // though routeId '2' looks like the Harlem Line ("[2][3] skips Clark St").
+        alertEntity("subway-2-mtasbwy", [
+          { routeId: "2", agencyId: "MTASBWY", stopId: "231" },
+        ]),
+        // Subway identified by route_type 1 (subway) with no agency -> REJECTED.
+        alertEntity("subway-3-routetype", [{ routeId: "3", routeType: 1 }]),
+        // Other operators sharing an MNR-looking route id are rejected too.
+        alertEntity("lirr-6", [{ routeId: "6", agencyId: "LI" }]),
+        // Route 8 is Port Jervis (west-of-Hudson, absent from this feed).
         alertEntity("west-of-hudson-8", [{ routeId: "8" }]),
-        alertEntity("other-route", [{ routeId: "9" }]),
+        alertEntity("other-route-9", [{ routeId: "9" }]),
       ],
     });
 
@@ -96,11 +116,17 @@ describe("MetroNorthRealtime", () => {
     const alerts = await client.getServiceAlerts();
 
     expect(alerts.map((alert) => alert.alert_id)).toEqual([
-      "route-4",
-      "route-6",
       "agency-mnr",
+      "mnr-elevator",
+      "route-4-no-agency",
+      "route-1-rail",
       "system-wide",
     ]);
+    // Subway/other-operator collisions are excluded.
+    const ids = alerts.map((alert) => alert.alert_id);
+    expect(ids).not.toContain("subway-2-mtasbwy");
+    expect(ids).not.toContain("subway-3-routetype");
+    expect(ids).not.toContain("lirr-6");
   });
 
   it("deletes stale realtime fallback rows before persisting fresh trip updates", async () => {

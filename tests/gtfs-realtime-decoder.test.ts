@@ -46,6 +46,33 @@ describe('decodeGtfsRealtimeFeed MNR stop-time extension', () => {
     expect(stopTimeUpdate?.departure?.time).toBe('1704135000');
   });
 
+  it('decodes alert enums to their string names (effect/cause), not numeric codes', () => {
+    // The wire carries enums as numeric codes (Effect.ACCESSIBILITY_ISSUE = 11,
+    // Cause.MAINTENANCE = 9), which is how the live MTA feed encodes them.
+    const buffer = encodeFeed({
+      header: { gtfsRealtimeVersion: '2.0' },
+      entity: [
+        {
+          id: 'alert-1',
+          alert: {
+            effect: 11,
+            cause: 9,
+            informedEntity: [{ agencyId: 'MNR', routeId: '3' }],
+            headerText: { translation: [{ text: 'Elevator out of service', language: 'en' }] },
+          },
+        },
+      ],
+    });
+
+    const feed = decodeGtfsRealtimeFeed(buffer);
+    const alert = feed.entity[0].alert;
+
+    // The handler compares `effect === 'ACCESSIBILITY_ISSUE'`; the decoder must
+    // surface the enum name, not the numeric string "11".
+    expect(alert?.effect).toBe('ACCESSIBILITY_ISSUE');
+    expect(alert?.cause).toBe('MAINTENANCE');
+  });
+
   it('decodes cleanly with track/trainStatus undefined when the extension is absent', () => {
     const buffer = encodeFeed({
       header: { gtfsRealtimeVersion: '2.0' },

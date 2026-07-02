@@ -1,4 +1,5 @@
 import {
+  GetAccessibilityStatusSchema,
   GetDeparturesSchema,
   GetRouteScheduleSchema,
   GetServiceAlertsSchema,
@@ -8,7 +9,9 @@ import {
   GetFirstLastTrainsSchema,
   PlanMetroNorthTripSchema,
   SearchStationsSchema,
+  type ServiceAlert,
   type StationPairTrip,
+  type TransferItinerary,
 } from '../domain/gtfs.js';
 import { getMetroNorthServiceContext } from '../domain/transit-time.js';
 import { ROUTE_IDS_BY_NAME, WEST_OF_HUDSON_LINES } from '../config.js';
@@ -33,7 +36,29 @@ export const toolHandlers: Record<string, ToolHandler> = {
   get_station_pair_schedule: handleGetStationPairSchedule,
   get_first_last_trains: handleGetFirstLastTrains,
   plan_metro_north_trip: handlePlanMetroNorthTrip,
+  get_accessibility_status: handleGetAccessibilityStatus,
 } satisfies Record<string, ToolHandler>;
+
+// Matches alert text that describes an elevator/escalator/accessibility condition.
+// The MTA all-alerts feed carries these as free text (no dedicated MNR
+// elevator/escalator feed exists), so this is the primary detection path.
+const ACCESSIBILITY_KEYWORDS = /elevator|escalator|accessib|ADA|wheelchair|lift/i;
+
+// The GTFS-RT `Alert.effect` value the feed uses for accessibility disruptions.
+// Matched in addition to the keyword scan so a correctly-tagged alert is caught
+// even if its text avoids the keywords above.
+const ACCESSIBILITY_EFFECT = 'ACCESSIBILITY_ISSUE';
+
+const ACCESSIBILITY_STATUS_PAGE = 'https://new.mta.info/elevator-escalator-status';
+
+const ACCESSIBILITY_DATA_CAVEAT =
+  'The MTA publishes no machine-readable Metro-North elevator/escalator outage feed, so this is derived from free-text service alerts and may be incomplete. Check the MTA elevator & escalator status page for authoritative outage information.';
+
+function isAccessibilityAlert(alert: ServiceAlert): boolean {
+  if (alert.effect === ACCESSIBILITY_EFFECT) return true;
+  const haystack = `${alert.header_text} ${alert.description_text ?? ''}`;
+  return ACCESSIBILITY_KEYWORDS.test(haystack);
+}
 
 /**
  * Metro-North's west-of-Hudson lines (Pascack Valley, Port Jervis) are operated
@@ -246,6 +271,27 @@ async function handleGetSystemStatus(_args: Record<string, unknown>, context: To
   });
 }
 
+// A direct trip option inside a trip plan, tagged so consumers can tell it apart
+// from a one-transfer itinerary (which carries itinerary_type: 'one_transfer').
+function formatDirectOption(trip: StationPairTrip) {
+  return { itinerary_type: 'direct' as const, ...formatStationPairTrip(trip) };
+}
+
+// A one-transfer itinerary formatted for a trip plan. Each leg is run through the
+// same formatter as direct options so the leg shape matches (route, origin,
+// nested origin_departure) instead of leaking the raw StationPairTrip field names
+// (route_name, origin_station, scheduled_origin_departure). The itinerary-level
+// transfer window, totals, and risk flag pass through unchanged.
+function formatTransferItinerary(itinerary: TransferItinerary) {
+  return {
+    itinerary_type: itinerary.itinerary_type,
+    legs: itinerary.legs.map(formatStationPairTrip),
+    transfer: itinerary.transfer,
+    total_duration_minutes: itinerary.total_duration_minutes,
+    connection_at_risk: itinerary.connection_at_risk,
+  };
+}
+
 function formatStationPairTrip(trip: StationPairTrip) {
   return {
     trip_id: trip.trip_id,
@@ -301,7 +347,7 @@ async function handleGetStationPairSchedule(args: Record<string, unknown>, conte
       `No direct trains found from "${origin_station}" to "${destination_station}"`,
       {
         suggestion:
-          'Use search_stations to verify station names. Transfer planning is not included in this tool.',
+          'Use search_stations to verify station names, or plan_metro_north_trip for itineraries that include a transfer.',
       }
     );
   }
@@ -354,7 +400,7 @@ async function handlePlanMetroNorthTrip(args: Record<string, unknown>, context: 
     include_alerts,
   } = parseArgs(PlanMetroNorthTripSchema, args);
   const serviceDate = date || getMetroNorthServiceContext().serviceDate;
-  const options = await context.scheduleService.getStationPairSchedule(
+  const directOptions = await context.scheduleService.getStationPairSchedule(
     origin_station,
     destination_station,
     {
@@ -365,29 +411,62 @@ async function handlePlanMetroNorthTrip(args: Record<string, unknown>, context: 
     }
   );
 
-  if (options.length === 0) {
+  // Only reach for transfers when direct trains don't already fill the request.
+  // Grand Central <-> mainline pairs fill instantly, so this short-circuits the
+  // heavier transfers query for the common case.
+  let transferOptions: TransferItinerary[] = [];
+  if (limit === undefined || directOptions.length < limit) {
+    transferOptions = await context.scheduleService.getTransferItineraries(
+      origin_station,
+      destination_station,
+      {
+        date: serviceDate,
+        departAfter: depart_after,
+        limit,
+        includeRealtime: include_realtime,
+      }
+    );
+  }
+
+  if (directOptions.length === 0 && transferOptions.length === 0) {
     throw new ToolDomainError(
       'not_found',
-      `No direct trip options found from "${origin_station}" to "${destination_station}"`,
+      `No direct or one-transfer trip options found from "${origin_station}" to "${destination_station}"`,
       {
         suggestion:
-          'Use search_stations to verify station names. Transfer planning is not included in this tool.',
+          'Use search_stations to verify station names. This planner covers direct trains and one-transfer itineraries via the MTA\'s guaranteed connections at hub stations; trips needing two or more transfers are not supported.',
       }
     );
   }
 
   const status = await handleGetSystemStatus({}, context);
+  // Alerts consider every leg's route (direct trips and both legs of each transfer).
+  const alertTrips = [...directOptions, ...transferOptions.flatMap((itinerary) => itinerary.legs)];
   const alerts = include_alerts
-    ? await getRelevantTripAlerts(options, origin_station, destination_station, context)
+    ? await getRelevantTripAlerts(alertTrips, origin_station, destination_station, context)
     : [];
+
+  // When at least one direct train exists it stays the recommendation and its
+  // peers are the alternates; transfers are surfaced separately. When no direct
+  // train exists, the best transfer itinerary becomes the recommendation.
+  // `alternate_options` holds only *direct* alternates (empty when there is no
+  // direct train), so transfers are never duplicated across it and
+  // `transfer_options`; the recommended transfer intentionally also appears as
+  // the first `transfer_options` entry.
+  const directPlanOptions = directOptions.map(formatDirectOption);
+  const transferPlanOptions = transferOptions.map(formatTransferItinerary);
+  const hasDirect = directPlanOptions.length > 0;
+  const recommendedOption = hasDirect ? directPlanOptions[0] : (transferPlanOptions[0] ?? null);
+  const alternateOptions = hasDirect ? directPlanOptions.slice(1) : [];
 
   return {
     origin: origin_station,
     destination: destination_station,
     service_date: serviceDate,
     depart_after: depart_after || null,
-    recommended_option: formatStationPairTrip(options[0]),
-    alternate_options: options.slice(1).map(formatStationPairTrip),
+    recommended_option: recommendedOption,
+    alternate_options: alternateOptions,
+    transfer_options: transferPlanOptions,
     alerts,
     data_freshness: status.gtfs_data,
     realtime: {
@@ -433,4 +512,59 @@ async function getRelevantTripAlerts(
       cause: alert.cause,
       effect: alert.effect,
     }));
+}
+
+async function handleGetAccessibilityStatus(args: Record<string, unknown>, context: ToolContext) {
+  const { station_name } = parseArgs(GetAccessibilityStatusSchema, args);
+  const alerts = await context.realtimeClient.getServiceAlerts();
+
+  let accessibilityAlerts = alerts.filter(isAccessibilityAlert);
+  let station = null;
+
+  if (station_name) {
+    const info = await context.stationService.getStationInfo(station_name);
+    if (!info) {
+      throw new ToolDomainError('not_found', `Station "${station_name}" not found`, {
+        suggestion: 'Use search_stations to find the correct station name',
+      });
+    }
+
+    // Narrow to alerts that mention the resolved (canonical) station name in their
+    // header or description. The all-alerts feed rarely populates a stop_id for
+    // MNR accessibility alerts, so a text match on the station name is the reliable
+    // signal here.
+    const needle = info.name.toLowerCase();
+    accessibilityAlerts = accessibilityAlerts.filter((alert) =>
+      `${alert.header_text} ${alert.description_text ?? ''}`.toLowerCase().includes(needle)
+    );
+
+    station = {
+      id: info.stop_id,
+      name: info.name,
+      location: {
+        latitude: info.latitude,
+        longitude: info.longitude,
+      },
+      zone: info.zone_id,
+      routes: info.routes,
+      wheelchair_accessible: info.wheelchair_accessible,
+    };
+  }
+
+  return {
+    station,
+    accessibility_alerts: accessibilityAlerts.map((alert) => ({
+      id: alert.alert_id,
+      header: alert.header_text,
+      description: alert.description_text,
+      cause: alert.cause,
+      effect: alert.effect,
+      affected_routes: alert.informed_entities
+        .filter((e) => e.route_id)
+        .map((e) => e.route_id),
+    })),
+    total: accessibilityAlerts.length,
+    data_caveat: ACCESSIBILITY_DATA_CAVEAT,
+    status_page: ACCESSIBILITY_STATUS_PAGE,
+  };
 }

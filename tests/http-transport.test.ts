@@ -204,19 +204,20 @@ afterAll(async () => {
 // ---------------------------------------------------------------------------
 
 describe('MCP protocol over HTTP', () => {
-  it('tools/list returns the expected 10 tools', async () => {
+  it('tools/list returns the expected 11 tools', async () => {
     const result = await mcpClient.listTools();
 
-    // Canary: the exact count (10) and the named tools below pin the public MCP
+    // Canary: the exact count (11) and the named tools below pin the public MCP
     // surface exposed over HTTP. If a tool is added/removed/renamed, update both
     // this count and the smoke scripts deliberately — a drift here means the
     // wire contract changed.
-    expect(result.tools).toHaveLength(10);
+    expect(result.tools).toHaveLength(11);
     const names = result.tools.map((t) => t.name);
     expect(names).toContain('get_departures');
     expect(names).toContain('search_stations');
     expect(names).toContain('get_system_status');
     expect(names).toContain('plan_metro_north_trip');
+    expect(names).toContain('get_accessibility_status');
   });
 
   it('tool call (search_stations) returns structured content without error', async () => {

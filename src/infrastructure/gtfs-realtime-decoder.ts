@@ -70,7 +70,9 @@ export interface GTFSRTAlert {
 interface DecodedFeedMessage {
   header?: {
     gtfsRealtimeVersion?: string;
-    incrementality?: number;
+    // `enums: String` decodes this to the enum name ("FULL_DATASET" /
+    // "DIFFERENTIAL"); older numeric decodes are still accepted defensively.
+    incrementality?: number | string;
     timestamp?: string | number;
   };
   entity?: DecodedFeedEntity[];
@@ -170,6 +172,12 @@ export function decodeGtfsRealtimeFeed(data: Uint8Array): FeedMessage {
     arrays: true,
     defaults: true,
     longs: String,
+    // Decode enum fields to their string names rather than numeric codes.
+    // Consumers compare `Alert.effect` against 'ACCESSIBILITY_ISSUE' and surface
+    // `cause`/`effect` to users, so the readable name is required; without this
+    // the effect arrives as the numeric string "11" and those checks silently
+    // fail. `schedule_relationship` likewise decodes to e.g. "SCHEDULED".
+    enums: String,
   }) as DecodedFeedMessage;
 
   // `defaults: true` fabricates proto2 scalar defaults for fields absent on the
@@ -232,7 +240,14 @@ function normalizeFeedMessage(feed: DecodedFeedMessage): FeedMessage {
   return {
     header: {
       gtfsRealtimeVersion: feed.header?.gtfsRealtimeVersion || "2.0",
-      incrementality: feed.header?.incrementality || 0,
+      // Keep the public `incrementality` numeric (0 = FULL_DATASET,
+      // 1 = DIFFERENTIAL) regardless of whether the enum decoded to a name or a
+      // code. The MTA feeds are always full datasets.
+      incrementality:
+        feed.header?.incrementality === "DIFFERENTIAL" ||
+        feed.header?.incrementality === 1
+          ? 1
+          : 0,
       timestamp: String(feed.header?.timestamp || ""),
     },
     entity: (feed.entity || []).map((entity) => ({

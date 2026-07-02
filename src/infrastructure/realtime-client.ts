@@ -45,12 +45,27 @@ function mapTrainStatusToStatus(
   return null;
 }
 
+// The camsys all-alerts feed multiplexes every MTA operator, and NYC subway
+// lines 1-6 collide with Metro-North's route ids 1-6. A bare route-id match
+// therefore leaks subway alerts (e.g. "[2][3] skips Clark St") into MNR
+// results, so require positive Metro-North identification instead:
+//   - agencyId 'MNR' is authoritative and passes outright;
+//   - any other agencyId (subway 'MTASBWY', buses 'MTABC'/'MTA NYCT', LIRR
+//     'LI', ...) is rejected even when its route id looks like an MNR line;
+//   - only when no agency is tagged do we fall back to the route id, and then
+//     only if route_type — GTFS route_type 1 = subway, 2 = rail — either is
+//     absent or says rail.
+// In the live feed every entity carries an agencyId and route_type is never
+// populated, so the agency check is what actually keeps subway alerts out; the
+// route_type guard is a defensive fallback for feeds that omit the agency.
 function isMetroNorthAlertEntity(
   entity: NonNullable<GTFSRTAlert["informedEntity"]>[number],
 ) {
+  if (entity.agencyId === "MNR") return true;
+  if (entity.agencyId !== undefined) return false;
+  if (entity.routeType !== undefined && entity.routeType !== 2) return false;
   return (
-    entity.agencyId === "MNR" ||
-    (entity.routeId !== undefined && METRO_NORTH_ROUTE_IDS.has(entity.routeId))
+    entity.routeId !== undefined && METRO_NORTH_ROUTE_IDS.has(entity.routeId)
   );
 }
 

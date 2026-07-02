@@ -165,7 +165,8 @@ Tool results include readable text and MCP `structuredContent`. Invalid inputs a
 | `get_system_status`         | Check feed availability and local data freshness       |
 | `get_station_pair_schedule` | Find direct trains between two stations                |
 | `get_first_last_trains`     | Get first and last direct trains for a service date    |
-| `plan_metro_north_trip`     | Plan a direct trip with options, alerts, and freshness |
+| `plan_metro_north_trip`     | Plan a direct or one-transfer trip with options, alerts, and freshness |
+| `get_accessibility_status`  | Report elevator/escalator/accessibility alerts (derived from text alerts) |
 
 Example:
 

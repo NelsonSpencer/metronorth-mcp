@@ -58,6 +58,11 @@ async function main() {
       'tools/list did not include plan_metro_north_trip'
     );
     assertIncludes(
+      tools.tools.map((tool) => tool.name),
+      'get_accessibility_status',
+      'tools/list did not include get_accessibility_status'
+    );
+    assertIncludes(
       resources.resources.map((resource) => resource.uri),
       'metronorth://system/status',
       'resources/list did not include system status'
@@ -146,6 +151,24 @@ async function main() {
     });
     if (!prompt.messages[0]?.content || prompt.messages[0].content.type !== 'text') {
       throw new Error('plan-metro-north-trip did not return a text prompt message');
+    }
+
+    // completion/complete: route-name prompt argument (deterministic, no DB).
+    const routeCompletion = await client.complete({
+      ref: { type: 'ref/prompt', name: 'summarize-service-status' },
+      argument: { name: 'route_name', value: 'har' },
+    });
+    if (!routeCompletion.completion?.values.includes('Harlem')) {
+      throw new Error('completion/complete did not suggest Harlem for route_name "har"');
+    }
+
+    // completion/complete: station resource-template variable (exercises search).
+    const stationCompletion = await client.complete({
+      ref: { type: 'ref/resource', uri: 'metronorth://station/{station_name}' },
+      argument: { name: 'station_name', value: 'Grand' },
+    });
+    if (!Array.isArray(stationCompletion.completion?.values)) {
+      throw new Error('completion/complete did not return a station values array');
     }
 
     console.log('Metro-North MCP protocol smoke check passed.');
