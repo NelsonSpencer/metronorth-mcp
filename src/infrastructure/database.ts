@@ -8,6 +8,19 @@ const logger = createModuleLogger('database');
 
 let sqlite: Database.Database | null = null;
 
+// Current database schema version. Bump this (and add a migration branch in
+// runMigrations) whenever the GTFS schema changes so that databases created by
+// older versions upgrade in place. Databases predating schema versioning report
+// no `schema_version` metadata and are treated as version 1.
+export const SCHEMA_VERSION = 3;
+
+// Metadata key holding the applied schema version.
+const SCHEMA_VERSION_KEY = 'schema_version';
+
+// Metadata flag set by a migration to force a one-time GTFS re-ingest so that
+// newly added columns/tables get populated. Consumed by GTFSLoader.needsUpdate.
+export const GTFS_FORCE_REFRESH_KEY = 'gtfs_force_refresh';
+
 export function getDatabase(): Database.Database {
   if (sqlite) return sqlite;
 
@@ -101,6 +114,7 @@ function initializeSchema() {
       shape_id TEXT,
       wheelchair_accessible INTEGER,
       bikes_allowed INTEGER,
+      peak_offpeak INTEGER,
       FOREIGN KEY (route_id) REFERENCES routes(route_id)
     );
 
@@ -116,6 +130,8 @@ function initializeSchema() {
       drop_off_type INTEGER,
       shape_dist_traveled REAL,
       timepoint INTEGER,
+      track TEXT,
+      note_id TEXT,
       PRIMARY KEY (trip_id, stop_sequence),
       FOREIGN KEY (trip_id) REFERENCES trips(trip_id),
       FOREIGN KEY (stop_id) REFERENCES stops(stop_id)
@@ -143,6 +159,27 @@ function initializeSchema() {
       PRIMARY KEY (service_id, date)
     );
 
+    -- Transfers table (same-station trip-to-trip timed transfers)
+    CREATE TABLE IF NOT EXISTS transfers (
+      from_stop_id TEXT NOT NULL,
+      to_stop_id TEXT NOT NULL,
+      from_route_id TEXT,
+      to_route_id TEXT,
+      from_trip_id TEXT NOT NULL,
+      to_trip_id TEXT NOT NULL,
+      transfer_type INTEGER NOT NULL DEFAULT 1,
+      min_transfer_time INTEGER,
+      PRIMARY KEY (from_trip_id, to_trip_id, from_stop_id)
+    );
+
+    -- Notes table (GTFS note reference codes, e.g. "H" = departs early)
+    CREATE TABLE IF NOT EXISTS notes (
+      note_id TEXT PRIMARY KEY,
+      note_mark TEXT,
+      note_title TEXT,
+      note_desc TEXT
+    );
+
     -- Realtime updates table
     CREATE TABLE IF NOT EXISTS realtime_updates (
       trip_id TEXT NOT NULL,
@@ -150,6 +187,8 @@ function initializeSchema() {
       arrival_delay INTEGER,
       departure_delay INTEGER,
       schedule_relationship TEXT,
+      track TEXT,
+      train_status TEXT,
       updated_at TEXT DEFAULT (datetime('now')),
       PRIMARY KEY (trip_id, stop_id)
     );
@@ -170,11 +209,71 @@ function initializeSchema() {
     CREATE INDEX IF NOT EXISTS idx_trips_route ON trips(route_id);
     CREATE INDEX IF NOT EXISTS idx_trips_service ON trips(service_id);
     CREATE INDEX IF NOT EXISTS idx_calendar_dates_date ON calendar_dates(date);
+    CREATE INDEX IF NOT EXISTS idx_transfers_from_trip ON transfers(from_trip_id);
+    CREATE INDEX IF NOT EXISTS idx_transfers_to_trip ON transfers(to_trip_id);
     CREATE INDEX IF NOT EXISTS idx_realtime_trip ON realtime_updates(trip_id);
     CREATE INDEX IF NOT EXISTS idx_realtime_updated_at ON realtime_updates(updated_at);
   `);
 
+  runMigrations();
+
   logger.info('Database schema initialized');
+}
+
+// Apply in-place schema migrations for databases created by older versions.
+// initializeSchema has already added any brand-new tables/columns via
+// CREATE TABLE IF NOT EXISTS, so this only backfills columns that must be
+// ALTERed onto pre-existing tables and records the new schema version.
+function runMigrations() {
+  if (!sqlite) return;
+
+  const currentVersion = Number(getMetadata(SCHEMA_VERSION_KEY) ?? '1');
+  if (currentVersion >= SCHEMA_VERSION) return;
+
+  logger.info({ from: currentVersion, to: SCHEMA_VERSION }, 'Migrating database schema');
+
+  // Only static-GTFS column/table additions need a one-time re-ingest to
+  // populate; transient realtime columns do not.
+  let forceGtfsRefresh = false;
+
+  // v1 -> v2: surface GTFS fields the loader previously dropped. New tables
+  // (transfers, notes) already exist via CREATE TABLE IF NOT EXISTS above; these
+  // columns must be ALTERed onto tables that predate v2.
+  if (currentVersion < 2) {
+    addColumnIfMissing('stop_times', 'track', 'TEXT');
+    addColumnIfMissing('stop_times', 'note_id', 'TEXT');
+    addColumnIfMissing('trips', 'peak_offpeak', 'INTEGER');
+    // These new static columns must be backfilled from a fresh GTFS ingest.
+    forceGtfsRefresh = true;
+  }
+
+  // v2 -> v3: realtime track + train status from the MTA Railroad extension.
+  // realtime_updates is transient (rewritten on every feed fetch), so no GTFS
+  // refresh is required for these columns.
+  if (currentVersion < 3) {
+    addColumnIfMissing('realtime_updates', 'track', 'TEXT');
+    addColumnIfMissing('realtime_updates', 'train_status', 'TEXT');
+  }
+
+  setMetadata(SCHEMA_VERSION_KEY, String(SCHEMA_VERSION));
+  if (forceGtfsRefresh) {
+    // Force a one-time GTFS re-ingest so the newly added static columns populate.
+    setMetadata(GTFS_FORCE_REFRESH_KEY, '1');
+  }
+
+  logger.info(
+    { version: SCHEMA_VERSION, gtfsRefreshForced: forceGtfsRefresh },
+    'Database schema migration complete'
+  );
+}
+
+// Add a column only when it is absent so the migration is idempotent and safe
+// against both freshly created databases (column already present via CREATE
+// TABLE) and older ones that need the ALTER.
+function addColumnIfMissing(table: string, column: string, definition: string) {
+  const columns = runQuery<{ name: string }>(`PRAGMA table_info(${table})`);
+  if (columns.some((c) => c.name === column)) return;
+  getSqlite().exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 // Utility function to run raw queries
@@ -214,4 +313,9 @@ export function setMetadata(key: string, value: string) {
      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
     [key, value]
   );
+}
+
+// Delete metadata value (no-op when the key is absent)
+export function deleteMetadata(key: string) {
+  runStatement('DELETE FROM metadata WHERE key = ?', [key]);
 }

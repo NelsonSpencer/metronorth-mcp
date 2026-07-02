@@ -6,6 +6,14 @@ const dbMethods = vi.hoisted(() => ({
   close: vi.fn(),
   exec: vi.fn(),
   pragma: vi.fn(),
+  // Schema initialization now runs migrations, which read/write metadata via
+  // prepared statements. Return empty result sets so the migration path runs
+  // against the mock without touching a real database.
+  prepare: vi.fn(() => ({
+    all: vi.fn(() => []),
+    get: vi.fn(() => undefined),
+    run: vi.fn(),
+  })),
 }));
 const databaseConstructorMock = vi.hoisted(() => vi.fn());
 
@@ -24,6 +32,7 @@ describe("database initialization", () => {
     dbMethods.close.mockReset();
     dbMethods.exec.mockReset();
     dbMethods.pragma.mockReset();
+    dbMethods.prepare.mockClear();
     databaseConstructorMock.mockReset();
   });
 

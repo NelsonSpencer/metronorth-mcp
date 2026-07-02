@@ -14,8 +14,13 @@ const realtimeMocks = vi.hoisted(() => ({
     delaySeconds: 300,
     status: 'delayed',
     actualTime: null,
+    track: null as string | null,
+    trainStatus: null as string | null,
   })),
 }));
+
+// Scheduled track returned by the departures query; mutated by track-merge tests.
+const scheduleFixture = vi.hoisted(() => ({ departureTrack: '2' as string | null }));
 
 const stationPairRows = vi.hoisted(() => [
   {
@@ -34,6 +39,7 @@ const stationPairRows = vi.hoisted(() => [
     origin_sequence: 1,
     destination_sequence: 4,
     service_id: 'weekday',
+    origin_track: '4',
   },
   {
     trip_id: 'trip-pair-2',
@@ -51,6 +57,7 @@ const stationPairRows = vi.hoisted(() => [
     origin_sequence: 1,
     destination_sequence: 4,
     service_id: 'weekday',
+    origin_track: null,
   },
 ]);
 
@@ -142,6 +149,7 @@ vi.mock('../src/infrastructure/database.js', () => {
             arrival_time: '11:59:00',
             stop_sequence: 1,
             service_id: 'weekday',
+            track: scheduleFixture.departureTrack,
           },
         ]),
       };
@@ -210,7 +218,10 @@ describe('ScheduleService', () => {
       delaySeconds: 300,
       status: 'delayed',
       actualTime: null,
+      track: null,
+      trainStatus: null,
     });
+    scheduleFixture.departureTrack = '2';
   });
 
   it('returns realtime departure delays in minutes', async () => {
@@ -348,5 +359,85 @@ describe('ScheduleService', () => {
     expect(realtimeMocks.getTripUpdates).toHaveBeenCalledTimes(1);
     expect(realtimeMocks.getDelayForTripAtStopFromUpdates).toHaveBeenCalledTimes(2);
     expect(realtimeMocks.getDelayForTripFromUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it('prefers the realtime track assignment over the scheduled track', async () => {
+    realtimeMocks.getRealtimeInfoForTripAtStopFromUpdates.mockReturnValue({
+      delaySeconds: 120,
+      status: 'delayed',
+      actualTime: null,
+      track: '5',
+      trainStatus: 'On-Time',
+    });
+    scheduleFixture.departureTrack = '2';
+
+    const { ScheduleService } = await import('../src/infrastructure/schedule-service.js');
+    const service = new ScheduleService();
+
+    const departures = await service.getDepartures('Grand Central', 'outbound', 1, true);
+
+    expect(departures[0].track).toBe('5');
+    expect(departures[0].scheduled_track).toBe('2');
+    expect(departures[0].track_source).toBe('realtime');
+    expect(departures[0].platform).toBe('5');
+    expect(departures[0].train_status).toBe('On-Time');
+  });
+
+  it('falls back to the scheduled track when realtime has no track', async () => {
+    realtimeMocks.getRealtimeInfoForTripAtStopFromUpdates.mockReturnValue({
+      delaySeconds: 0,
+      status: 'on_time',
+      actualTime: null,
+      track: null,
+      trainStatus: null,
+    });
+    scheduleFixture.departureTrack = '2';
+
+    const { ScheduleService } = await import('../src/infrastructure/schedule-service.js');
+    const service = new ScheduleService();
+
+    const departures = await service.getDepartures('Grand Central', 'outbound', 1, true);
+
+    expect(departures[0].track).toBe('2');
+    expect(departures[0].scheduled_track).toBe('2');
+    expect(departures[0].track_source).toBe('scheduled');
+  });
+
+  it('reports a null track when neither realtime nor schedule provides one', async () => {
+    realtimeMocks.getRealtimeInfoForTripAtStopFromUpdates.mockReturnValue({
+      delaySeconds: 0,
+      status: 'on_time',
+      actualTime: null,
+      track: null,
+      trainStatus: null,
+    });
+    scheduleFixture.departureTrack = null;
+
+    const { ScheduleService } = await import('../src/infrastructure/schedule-service.js');
+    const service = new ScheduleService();
+
+    const departures = await service.getDepartures('Grand Central', 'outbound', 1, true);
+
+    expect(departures[0].track).toBeNull();
+    expect(departures[0].scheduled_track).toBeNull();
+    expect(departures[0].track_source).toBeNull();
+  });
+
+  it('carries the origin scheduled track onto station-pair trips', async () => {
+    const { ScheduleService } = await import('../src/infrastructure/schedule-service.js');
+    const service = new ScheduleService();
+
+    const trips = await service.getStationPairSchedule('Grand Central', 'White Plains', {
+      date: '2024-01-01',
+      departAfter: '24:00',
+      limit: 2,
+      includeRealtime: false,
+    });
+
+    expect(trips[0].track).toBe('4');
+    expect(trips[0].scheduled_track).toBe('4');
+    expect(trips[0].track_source).toBe('scheduled');
+    expect(trips[1].track).toBeNull();
+    expect(trips[1].track_source).toBeNull();
   });
 });

@@ -11,7 +11,7 @@ import {
   type StationPairTrip,
 } from '../domain/gtfs.js';
 import { getMetroNorthServiceContext } from '../domain/transit-time.js';
-import { ROUTE_IDS_BY_NAME } from '../config.js';
+import { ROUTE_IDS_BY_NAME, WEST_OF_HUDSON_LINES } from '../config.js';
 import { getSystemStatus } from '../system-status.js';
 import type { ToolContext } from './context.js';
 import { ToolDomainError } from './errors.js';
@@ -34,6 +34,28 @@ export const toolHandlers: Record<string, ToolHandler> = {
   get_first_last_trains: handleGetFirstLastTrains,
   plan_metro_north_trip: handlePlanMetroNorthTrip,
 } satisfies Record<string, ToolHandler>;
+
+/**
+ * Metro-North's west-of-Hudson lines (Pascack Valley, Port Jervis) are operated
+ * by NJ Transit and are absent from the GTFS feed this server loads. Reject a
+ * request for one with an honest, actionable error instead of the generic
+ * "route not found" other unknown routes fall through to.
+ */
+function assertRouteIsCovered(routeName: string): void {
+  const normalized = routeName.trim().toLowerCase();
+  const line = WEST_OF_HUDSON_LINES.find((l) => l.name.toLowerCase() === normalized);
+  if (!line) return;
+
+  throw new ToolDomainError(
+    'not_covered',
+    `"${line.name}" is a west-of-Hudson Metro-North line operated by ${line.operated_by}, which is not included in this server's data. Check ${line.operated_by} for its schedules and alerts: ${line.reference_url}`,
+    {
+      line: line.name,
+      operated_by: line.operated_by,
+      reference_url: line.reference_url,
+    }
+  );
+}
 
 async function handleGetDepartures(args: Record<string, unknown>, context: ToolContext) {
   const parsed = parseArgs(GetDeparturesSchema, args);
@@ -64,6 +86,11 @@ async function handleGetDepartures(args: Record<string, unknown>, context: ToolC
       actual: d.actual_departure || d.scheduled_departure,
       delay: d.delay_minutes ? `${d.delay_minutes} min late` : null,
       status: d.status,
+      track: d.track,
+      track_source: d.track_source,
+      train_status: d.train_status,
+      fare_class: d.fare_class,
+      note: d.note,
       upcoming_stops: d.stops.slice(0, 5),
       trip_id: d.trip_id,
     })),
@@ -86,11 +113,17 @@ async function handleGetTripDetails(args: Record<string, unknown>, context: Tool
     route: details.route_name,
     direction: details.direction,
     service_days: details.service_days,
+    fare_class: details.fare_class,
+    notes: details.notes,
     stops: details.stops.map((s) => ({
       station: s.stop_name,
       arrival: s.arrival_time,
       departure: s.departure_time,
       delay: s.delay_minutes ? `${s.delay_minutes} min` : null,
+      track: s.track,
+      track_source: s.track_source,
+      train_status: s.train_status,
+      note: s.note,
     })),
     realtime_status: details.realtime_status,
   };
@@ -98,6 +131,7 @@ async function handleGetTripDetails(args: Record<string, unknown>, context: Tool
 
 async function handleGetRouteSchedule(args: Record<string, unknown>, context: ToolContext) {
   const { route_name, date, direction } = parseArgs(GetRouteScheduleSchema, args);
+  assertRouteIsCovered(route_name);
   const schedule = await context.scheduleService.getRouteSchedule(route_name, date, direction);
 
   if (schedule.length === 0) {
@@ -114,6 +148,7 @@ async function handleGetRouteSchedule(args: Record<string, unknown>, context: To
       trip_id: t.trip_id,
       destination: t.destination,
       departure: t.scheduled_departure,
+      fare_class: t.fare_class,
     })),
     total_trips: schedule.length,
   };
@@ -121,6 +156,9 @@ async function handleGetRouteSchedule(args: Record<string, unknown>, context: To
 
 async function handleGetServiceAlerts(args: Record<string, unknown>, context: ToolContext) {
   const { route_name, station_name } = parseArgs(GetServiceAlertsSchema, args);
+  if (route_name) {
+    assertRouteIsCovered(route_name);
+  }
   const alerts = await context.realtimeClient.getServiceAlerts();
 
   let filtered = alerts;
@@ -227,6 +265,11 @@ function formatStationPairTrip(trip: StationPairTrip) {
       delay_minutes: trip.destination_delay_minutes,
     },
     duration_minutes: trip.duration_minutes,
+    track: trip.track,
+    track_source: trip.track_source,
+    train_status: trip.train_status,
+    fare_class: trip.fare_class,
+    note: trip.note,
     status: trip.status,
   };
 }

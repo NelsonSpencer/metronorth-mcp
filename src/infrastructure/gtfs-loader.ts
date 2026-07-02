@@ -4,7 +4,14 @@ import csv from 'csv-parser';
 import { Readable } from 'node:stream';
 import { config, GTFS_STATIC_URL } from '../config.js';
 import { createModuleLogger } from '../logger.js';
-import { getSqlite, transaction, setMetadata, getMetadata } from './database.js';
+import {
+  getSqlite,
+  transaction,
+  setMetadata,
+  getMetadata,
+  deleteMetadata,
+  GTFS_FORCE_REFRESH_KEY,
+} from './database.js';
 import { packageMetadata } from '../package-metadata.js';
 import type {
   Stop,
@@ -14,6 +21,8 @@ import type {
   Calendar,
   CalendarDate,
   Agency,
+  Transfer,
+  TripNote,
 } from '../domain/gtfs.js';
 
 const logger = createModuleLogger('gtfs-loader');
@@ -27,7 +36,19 @@ const REQUIRED_FILES = [
   'stop_times.txt',
 ];
 
-// Optional files: calendar.txt, calendar_dates.txt (at least one should be present)
+// Optional files: calendar.txt, calendar_dates.txt (at least one should be
+// present), transfers.txt, and notes.txt (absent in some feed drops).
+
+// Parse a possibly-empty CSV value into an integer, mapping blank/invalid
+// values to null. csv-parser yields '' (not undefined) for empty cells, which
+// parseInt would turn into NaN.
+function parseIntOrNull(value: string | number | null | undefined): number | null {
+  if (value == null) return null;
+  const str = String(value).trim();
+  if (str === '') return null;
+  const parsed = Number.parseInt(str, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+}
 
 interface ParsedGTFS {
   agency: Agency[];
@@ -37,10 +58,20 @@ interface ParsedGTFS {
   stopTimes: StopTime[];
   calendar: Calendar[];
   calendarDates: CalendarDate[];
+  transfers: Transfer[];
+  notes: TripNote[];
 }
 
 export class GTFSLoader {
   async needsUpdate(): Promise<boolean> {
+    // A schema migration can force a re-ingest so newly added columns and
+    // tables get populated. The flag is cleared only after a successful import
+    // (see importToDatabase), so a transient download failure retries on the
+    // next startup instead of silently leaving the new columns empty.
+    if (getMetadata(GTFS_FORCE_REFRESH_KEY)) {
+      return true;
+    }
+
     const lastUpdate = getMetadata('gtfs_last_update');
     if (!lastUpdate) return true;
 
@@ -89,6 +120,8 @@ export class GTFSLoader {
       stopTimes: [],
       calendar: [],
       calendarDates: [],
+      transfers: [],
+      notes: [],
     };
 
     // Parse each file
@@ -117,6 +150,12 @@ export class GTFSLoader {
         case 'calendar_dates.txt':
           parsed.calendarDates = await this.parseCSV<CalendarDate>(content);
           break;
+        case 'transfers.txt':
+          parsed.transfers = await this.parseCSV<Transfer>(content);
+          break;
+        case 'notes.txt':
+          parsed.notes = await this.parseCSV<TripNote>(content);
+          break;
       }
     }
 
@@ -129,6 +168,8 @@ export class GTFSLoader {
         stopTimes: parsed.stopTimes.length,
         calendar: parsed.calendar.length,
         calendarDates: parsed.calendarDates.length,
+        transfers: parsed.transfers.length,
+        notes: parsed.notes.length,
       },
       'GTFS data parsed'
     );
@@ -154,10 +195,14 @@ export class GTFSLoader {
     const sqlite = getSqlite();
 
     transaction(() => {
-      // Clear existing data
+      // Clear existing data. trip_ids are regenerated on every feed drop, so
+      // transfers (which reference them) must be cleared and reloaded in the
+      // same transaction as trips/stop_times.
       sqlite.exec(`
         DELETE FROM stop_times;
+        DELETE FROM transfers;
         DELETE FROM trips;
+        DELETE FROM notes;
         DELETE FROM routes;
         DELETE FROM stops;
         DELETE FROM calendar;
@@ -225,8 +270,8 @@ export class GTFSLoader {
 
       // Import trips
       const insertTrip = sqlite.prepare(`
-        INSERT INTO trips (trip_id, route_id, service_id, trip_headsign, trip_short_name, direction_id, block_id, shape_id, wheelchair_accessible, bikes_allowed)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO trips (trip_id, route_id, service_id, trip_headsign, trip_short_name, direction_id, block_id, shape_id, wheelchair_accessible, bikes_allowed, peak_offpeak)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const trip of data.trips) {
         insertTrip.run(
@@ -239,14 +284,15 @@ export class GTFSLoader {
           trip.block_id || null,
           trip.shape_id || null,
           trip.wheelchair_accessible != null ? parseInt(String(trip.wheelchair_accessible)) : null,
-          trip.bikes_allowed != null ? parseInt(String(trip.bikes_allowed)) : null
+          trip.bikes_allowed != null ? parseInt(String(trip.bikes_allowed)) : null,
+          parseIntOrNull(trip.peak_offpeak)
         );
       }
 
       // Import stop times (batch for performance)
       const insertStopTime = sqlite.prepare(`
-        INSERT INTO stop_times (trip_id, arrival_time, departure_time, stop_id, stop_sequence, stop_headsign, pickup_type, drop_off_type, shape_dist_traveled, timepoint)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO stop_times (trip_id, arrival_time, departure_time, stop_id, stop_sequence, stop_headsign, pickup_type, drop_off_type, shape_dist_traveled, timepoint, track, note_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const st of data.stopTimes) {
         insertStopTime.run(
@@ -259,7 +305,9 @@ export class GTFSLoader {
           st.pickup_type != null ? parseInt(String(st.pickup_type)) : null,
           st.drop_off_type != null ? parseInt(String(st.drop_off_type)) : null,
           st.shape_dist_traveled != null ? parseFloat(String(st.shape_dist_traveled)) : null,
-          st.timepoint != null ? parseInt(String(st.timepoint)) : null
+          st.timepoint != null ? parseInt(String(st.timepoint)) : null,
+          st.track || null,
+          st.note_id || null
         );
       }
 
@@ -297,14 +345,59 @@ export class GTFSLoader {
           );
         }
       }
+
+      // Import transfers (optional file; trip-to-trip timed transfers). OR
+      // IGNORE guards against duplicate (from_trip_id, to_trip_id, from_stop_id)
+      // keys aborting the whole import.
+      const insertTransfer = sqlite.prepare(`
+        INSERT OR IGNORE INTO transfers (from_stop_id, to_stop_id, from_route_id, to_route_id, from_trip_id, to_trip_id, transfer_type, min_transfer_time)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const transfer of data.transfers) {
+        insertTransfer.run(
+          transfer.from_stop_id,
+          transfer.to_stop_id,
+          transfer.from_route_id || null,
+          transfer.to_route_id || null,
+          transfer.from_trip_id,
+          transfer.to_trip_id,
+          parseIntOrNull(transfer.transfer_type) ?? 1,
+          parseIntOrNull(transfer.min_transfer_time)
+        );
+      }
+
+      // Import notes (optional file; GTFS note reference codes)
+      const insertNote = sqlite.prepare(`
+        INSERT OR IGNORE INTO notes (note_id, note_mark, note_title, note_desc)
+        VALUES (?, ?, ?, ?)
+      `);
+      for (const note of data.notes) {
+        insertNote.run(
+          note.note_id,
+          note.note_mark || null,
+          note.note_title || null,
+          note.note_desc || null
+        );
+      }
     });
 
-    // Update metadata
+    // Update metadata. Clearing the force-refresh flag here (after the import
+    // transaction committed) makes the migration-forced refresh "once, until it
+    // works": failures before this point leave the flag set so the next
+    // startup retries, and the manual gtfs:update path consumes it too.
     setMetadata('gtfs_last_update', new Date().toISOString());
     setMetadata('gtfs_stops_count', String(data.stops.length));
     setMetadata('gtfs_trips_count', String(data.trips.length));
+    setMetadata('gtfs_transfers_count', String(data.transfers.length));
+    deleteMetadata(GTFS_FORCE_REFRESH_KEY);
 
-    logger.info('GTFS data imported successfully');
+    logger.info(
+      {
+        transfers: data.transfers.length,
+        notes: data.notes.length,
+      },
+      'GTFS data imported successfully'
+    );
   }
 
   async updateStaticData(force: boolean = false): Promise<boolean> {

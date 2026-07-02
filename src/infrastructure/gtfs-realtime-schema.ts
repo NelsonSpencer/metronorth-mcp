@@ -152,4 +152,17 @@ message TranslatedString {
     optional string language = 2;
   }
 }
+
+// MTA Railroad extension carried on TripUpdate.StopTimeUpdate (field 1005).
+// Metro-North populates the assigned track and a human-readable train status
+// ("On-Time", "Delayed", ...) here; both are absent on feeds that predate the
+// extension, so consumers must read defensively and fall back to undefined.
+message MnrStopTimeUpdate {
+  optional string track = 1;
+  optional string trainStatus = 2;
+}
+
+extend TripUpdate.StopTimeUpdate {
+  optional MnrStopTimeUpdate mnr_stop_time_update = 1005;
+}
 `;

@@ -18,6 +18,10 @@ This package runs as a local stdio MCP server by default. The project does not o
 - Best-effort public MTA schedule, realtime, and alert data.
 - Node.js 22 or newer is required. Current development expects npm and the native `better-sqlite3` install path to work on the target machine.
 
+## Coverage
+
+Covers Metro-North's east-of-Hudson lines: Hudson, Harlem, New Haven, New Canaan, Danbury, and Waterbury. The west-of-Hudson lines (Pascack Valley and Port Jervis) are operated by [NJ Transit](https://www.njtransit.com/) and are not part of the MTA Metro-North GTFS feed, so they are not included here. Requests for those lines return a `not_covered` error pointing to NJ Transit.
+
 ## Install with an Agent
 
 Paste this into your MCP-capable coding agent:

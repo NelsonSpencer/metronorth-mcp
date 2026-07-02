@@ -27,6 +27,8 @@ const pairTrips = [
     duration_minutes: 38,
     origin_delay_minutes: 5,
     destination_delay_minutes: 5,
+    fare_class: 'peak' as const,
+    note: { mark: 'H', description: 'Train may depart 5 minutes earlier than the time shown' },
     status: 'delayed' as const,
   },
   {
@@ -43,6 +45,8 @@ const pairTrips = [
     duration_minutes: 38,
     origin_delay_minutes: null,
     destination_delay_minutes: null,
+    fare_class: 'off_peak' as const,
+    note: null,
     status: 'unknown' as const,
   },
 ];
@@ -120,6 +124,15 @@ describe('trip-planning MCP tools', () => {
     expect(result.isError).toBeUndefined();
     expect(result.structuredContent?.trips).toHaveLength(2);
     expect(result.structuredContent?.realtime_available).toBe(true);
+
+    const [first, second] = result.structuredContent?.trips as Array<Record<string, unknown>>;
+    expect(first.fare_class).toBe('peak');
+    expect(first.note).toEqual({
+      mark: 'H',
+      description: 'Train may depart 5 minutes earlier than the time shown',
+    });
+    expect(second.fare_class).toBe('off_peak');
+    expect(second.note).toBeNull();
   });
 
   it('returns structured not_found for no direct station-pair trips', async () => {

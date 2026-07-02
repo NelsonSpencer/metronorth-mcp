@@ -4,7 +4,7 @@ import type {
   ListResourcesResult,
   ReadResourceResult,
 } from '@modelcontextprotocol/sdk/types.js';
-import { ROUTE_NAMES } from './config.js';
+import { ROUTE_NAMES, WEST_OF_HUDSON_LINES } from './config.js';
 import { getStationService } from './infrastructure/station-service.js';
 import { getSystemStatus } from './system-status.js';
 
@@ -38,7 +38,8 @@ export const resourceDefinitions: ListResourcesResult['resources'] = [
     uri: 'metronorth://routes',
     name: 'routes',
     title: 'Metro-North Routes',
-    description: 'Supported Metro-North route IDs and route names.',
+    description:
+      'Metro-North route IDs and names this server covers, plus the west-of-Hudson lines it does not.',
     mimeType: JSON_MIME_TYPE,
   },
   {
@@ -189,6 +190,14 @@ function getRoutesResource() {
     routes: Object.entries(ROUTE_NAMES).map(([route_id, route_name]) => ({
       route_id,
       route_name,
+      covered: true,
+    })),
+    west_of_hudson: WEST_OF_HUDSON_LINES.map((line) => ({
+      route_name: line.name,
+      covered: false,
+      operated_by: line.operated_by,
+      note: line.note,
+      reference_url: line.reference_url,
     })),
   };
 }

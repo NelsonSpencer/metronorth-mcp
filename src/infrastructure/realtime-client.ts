@@ -4,7 +4,11 @@ import { createModuleLogger } from "../logger.js";
 import { getSqlite, transaction } from "./database.js";
 import { getCache, CACHE_KEYS } from "./cache.js";
 import { packageMetadata } from "../package-metadata.js";
-import type { TripUpdate, ServiceAlert } from "../domain/gtfs.js";
+import type { TripUpdate, StopTimeUpdate, ServiceAlert } from "../domain/gtfs.js";
+import {
+  gtfsServiceTimeToEpochSeconds,
+  getMetroNorthServiceContext,
+} from "../domain/transit-time.js";
 import {
   decodeGtfsRealtimeFeed,
   type FeedMessage,
@@ -14,12 +18,32 @@ import {
 const logger = createModuleLogger("realtime");
 const METRO_NORTH_ROUTE_IDS = new Set(Object.keys(ROUTE_NAMES));
 const REALTIME_FALLBACK_TTL_MINUTES = 5;
+// Delays at or below this many seconds are reported as on-time, matching the
+// existing convention used across the schedule tooling.
+const ON_TIME_THRESHOLD_SECONDS = 60;
 
 type RealtimeStopInfo = {
   delaySeconds: number | null;
   status: string;
   actualTime: string | null;
+  track: string | null;
+  trainStatus: string | null;
 };
+
+// Map the MTA's free-text train status onto the constrained status enum used by
+// the tools. Only unambiguous states are mapped; anything else (e.g. "On-Time",
+// "Delayed" already conveyed by the delay math) returns null so the raw string
+// is surfaced separately without corrupting the enum.
+function mapTrainStatusToStatus(
+  trainStatus: string | null,
+): "cancelled" | null {
+  if (!trainStatus) return null;
+  const normalized = trainStatus.trim().toLowerCase();
+  if (normalized === "cancelled" || normalized === "canceled") {
+    return "cancelled";
+  }
+  return null;
+}
 
 function isMetroNorthAlertEntity(
   entity: NonNullable<GTFSRTAlert["informedEntity"]>[number],
@@ -127,7 +151,13 @@ export class MetroNorthRealtime {
             stop_id: stu.stopId || null,
             arrival_delay: stu.arrival?.delay ?? null,
             departure_delay: stu.departure?.delay ?? null,
+            arrival_time: stu.arrival?.time ? parseInt(stu.arrival.time, 10) : null,
+            departure_time: stu.departure?.time
+              ? parseInt(stu.departure.time, 10)
+              : null,
             schedule_relationship: stu.scheduleRelationship || null,
+            track: stu.track ?? null,
+            train_status: stu.trainStatus ?? null,
           })),
           timestamp: tu.timestamp ? parseInt(tu.timestamp) : null,
           vehicle_id: tu.vehicle?.id || null,
@@ -150,7 +180,7 @@ export class MetroNorthRealtime {
     const sqlite = getSqlite();
     const rows = sqlite
       .prepare(
-        `SELECT trip_id, stop_id, arrival_delay, departure_delay, schedule_relationship
+        `SELECT trip_id, stop_id, arrival_delay, departure_delay, schedule_relationship, track, train_status
          FROM realtime_updates
          WHERE updated_at > datetime('now', '-5 minutes')`,
       )
@@ -160,6 +190,8 @@ export class MetroNorthRealtime {
       arrival_delay: number | null;
       departure_delay: number | null;
       schedule_relationship: string | null;
+      track: string | null;
+      train_status: string | null;
     }>;
 
     // Group by trip_id
@@ -185,7 +217,12 @@ export class MetroNorthRealtime {
         stop_id: row.stop_id,
         arrival_delay: row.arrival_delay,
         departure_delay: row.departure_delay,
+        // The fallback table only persists relative delays, not absolute times.
+        arrival_time: null,
+        departure_time: null,
         schedule_relationship: row.schedule_relationship,
+        track: row.track,
+        train_status: row.train_status,
       });
     }
 
@@ -204,8 +241,8 @@ export class MetroNorthRealtime {
         .run();
 
       const insert = sqlite.prepare(`
-        INSERT OR REPLACE INTO realtime_updates (trip_id, stop_id, arrival_delay, departure_delay, schedule_relationship, updated_at)
-        VALUES (?, ?, ?, ?, ?, datetime('now'))
+        INSERT OR REPLACE INTO realtime_updates (trip_id, stop_id, arrival_delay, departure_delay, schedule_relationship, track, train_status, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
       `);
 
       for (const update of updates) {
@@ -217,6 +254,8 @@ export class MetroNorthRealtime {
               stu.arrival_delay,
               stu.departure_delay,
               stu.schedule_relationship,
+              stu.track,
+              stu.train_status,
             );
           }
         }
@@ -378,7 +417,7 @@ export class MetroNorthRealtime {
   async getRealtimeInfoForTripAtStop(
     tripId: string,
     stopId: string,
-    _scheduledDepartureTime: string,
+    scheduledDepartureTime: string,
     trainNumber?: string,
   ): Promise<RealtimeStopInfo> {
     const updates = await this.getTripUpdates();
@@ -386,7 +425,7 @@ export class MetroNorthRealtime {
       updates,
       tripId,
       stopId,
-      _scheduledDepartureTime,
+      scheduledDepartureTime,
       trainNumber,
     );
   }
@@ -395,13 +434,19 @@ export class MetroNorthRealtime {
     updates: TripUpdate[],
     tripId: string,
     stopId: string,
-    _scheduledDepartureTime: string,
+    scheduledDepartureTime: string,
     trainNumber?: string,
   ): RealtimeStopInfo {
     const tripUpdate = this.findTripUpdate(updates, tripId, trainNumber);
 
     if (!tripUpdate) {
-      return { delaySeconds: null, status: "unknown", actualTime: null };
+      return {
+        delaySeconds: null,
+        status: "unknown",
+        actualTime: null,
+        track: null,
+        trainStatus: null,
+      };
     }
 
     const stopUpdate = tripUpdate.stop_time_updates.find(
@@ -410,20 +455,75 @@ export class MetroNorthRealtime {
 
     if (!stopUpdate) {
       // Train exists in realtime but this stop not found - assume on time
-      return { delaySeconds: 0, status: "on_time", actualTime: null };
+      return {
+        delaySeconds: 0,
+        status: "on_time",
+        actualTime: null,
+        track: null,
+        trainStatus: null,
+      };
     }
 
-    // Check for explicit delay values first
-    const delaySeconds =
+    const track = stopUpdate.track ?? null;
+    const trainStatus = stopUpdate.train_status ?? null;
+
+    // Prefer an explicit relative delay, then fall back to deriving it from the
+    // absolute predicted time. Most MNR stop-time updates omit `delay` but always
+    // carry an absolute `time`, so without this fallback real delays report as
+    // on-time.
+    let delaySeconds =
       stopUpdate.departure_delay ?? stopUpdate.arrival_delay ?? null;
 
-    if (delaySeconds !== null) {
-      const status = delaySeconds <= 60 ? "on_time" : "delayed";
-      return { delaySeconds, status, actualTime: null };
+    if (delaySeconds === null) {
+      delaySeconds = this.deriveDelayFromAbsoluteTime(
+        tripUpdate,
+        stopUpdate,
+        scheduledDepartureTime,
+      );
     }
 
-    // No explicit delay - train is tracked and on time
-    return { delaySeconds: 0, status: "on_time", actualTime: null };
+    // A cancellation from the MTA train-status field is authoritative and cannot
+    // be inferred from timing; otherwise the status follows the delay, keeping
+    // the existing "<=60s counts as on-time" convention.
+    const cancelledStatus = mapTrainStatusToStatus(trainStatus);
+    let status: string;
+    if (cancelledStatus) {
+      status = cancelledStatus;
+    } else if (delaySeconds === null) {
+      status = "on_time";
+      delaySeconds = 0;
+    } else {
+      status = delaySeconds <= ON_TIME_THRESHOLD_SECONDS ? "on_time" : "delayed";
+    }
+
+    return { delaySeconds, status, actualTime: null, track, trainStatus };
+  }
+
+  // Derive a delay (seconds) from the absolute predicted epoch time on a stop
+  // update. Returns null when neither an absolute time nor a resolvable service
+  // date / schedule time is available.
+  private deriveDelayFromAbsoluteTime(
+    tripUpdate: TripUpdate,
+    stopUpdate: StopTimeUpdate,
+    scheduledTime: string,
+  ): number | null {
+    const absoluteEpoch =
+      stopUpdate.departure_time ?? stopUpdate.arrival_time ?? null;
+    if (absoluteEpoch === null) {
+      return null;
+    }
+
+    const serviceDate =
+      tripUpdate.start_date ?? getMetroNorthServiceContext().serviceDate;
+    const scheduledEpoch = gtfsServiceTimeToEpochSeconds(
+      serviceDate,
+      scheduledTime,
+    );
+    if (!Number.isFinite(scheduledEpoch)) {
+      return null;
+    }
+
+    return absoluteEpoch - scheduledEpoch;
   }
 
   private findTripUpdate(
