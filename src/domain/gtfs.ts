@@ -482,6 +482,20 @@ export const ToolInputSchemas = {
 // Output Types
 // ============================================================================
 
+// Peak vs off-peak fare classification for a trip, derived from the GTFS
+// `trips.peak_offpeak` flag (1 = peak, 0 = off-peak). `null` when the feed does
+// not classify the trip (e.g. pre-migration rows where the column is NULL).
+export type FareClass = 'peak' | 'off_peak' | null;
+
+// A resolved GTFS note reference (from notes.txt, joined via stop_times.note_id).
+// `mark` is the short code (e.g. "H", "B"); `description` is the human-readable
+// text (note_desc, falling back to note_title). Notes with no text are omitted
+// entirely rather than surfaced with an empty description.
+export interface StopNote {
+  mark: string | null;
+  description: string;
+}
+
 export interface DepartureInfo {
   trip_id: string;
   route_name: string;
@@ -497,6 +511,10 @@ export interface DepartureInfo {
   scheduled_track: string | null;
   track_source: 'realtime' | 'scheduled' | null;
   train_status: string | null;
+  // Peak/off-peak classification for the trip (null when unclassified).
+  fare_class: FareClass;
+  // Note attached to the origin stop for this departure (null when none).
+  note: StopNote | null;
   status: 'on_time' | 'delayed' | 'cancelled' | 'unknown';
   stops: string[];
 }
@@ -516,7 +534,12 @@ export interface TripDetails {
   route_name: string;
   direction: string;
   service_days: string[];
+  // Peak/off-peak classification for the trip (null when unclassified).
+  fare_class: FareClass;
   stops: TripStop[];
+  // Distinct notes referenced anywhere along the trip's stop times (empty when
+  // none). Deduplicated across stops so a note that repeats appears once.
+  notes: StopNote[];
   realtime_status: TripRealtimeStatus | null;
 }
 
@@ -531,6 +554,8 @@ export interface TripStop {
   scheduled_track: string | null;
   track_source: 'realtime' | 'scheduled' | null;
   train_status: string | null;
+  // Note attached to this stop (null when none).
+  note: StopNote | null;
 }
 
 export interface TripRealtimeStatus {
@@ -560,6 +585,10 @@ export interface StationPairTrip {
   scheduled_track: string | null;
   track_source: 'realtime' | 'scheduled' | null;
   train_status: string | null;
+  // Peak/off-peak classification for the trip (null when unclassified).
+  fare_class: FareClass;
+  // Note attached to the origin stop for this leg (null when none).
+  note: StopNote | null;
   status: 'on_time' | 'delayed' | 'cancelled' | 'unknown';
 }
 

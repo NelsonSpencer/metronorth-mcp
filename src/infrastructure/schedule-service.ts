@@ -5,8 +5,10 @@ import { createModuleLogger } from '../logger.js';
 import { ROUTE_NAMES } from '../config.js';
 import type {
   DepartureInfo,
+  FareClass,
   FirstLastTrains,
   StationPairTrip,
+  StopNote,
   TripDetails,
   TripStop,
 } from '../domain/gtfs.js';
@@ -20,6 +22,14 @@ import {
 
 const logger = createModuleLogger('schedule-service');
 
+// Raw note columns as joined from the notes table (aliases vary per query, so
+// callers pass the resolved values into buildNote).
+interface NoteColumns {
+  note_mark: string | null;
+  note_title: string | null;
+  note_desc: string | null;
+}
+
 interface ScheduleRow {
   trip_id: string;
   trip_short_name: string | null;
@@ -32,6 +42,13 @@ interface ScheduleRow {
   stop_sequence: number;
   service_id: string;
   track: string | null;
+  // Trip-level peak/off-peak flag (1 = peak, 0 = off-peak, null = unclassified).
+  peak_offpeak: number | null;
+  // Note joined via the origin stop_time (departures only; null on route rows
+  // that do not join notes).
+  note_mark: string | null;
+  note_title: string | null;
+  note_desc: string | null;
 }
 
 interface TripStopRow {
@@ -41,6 +58,36 @@ interface TripStopRow {
   departure_time: string;
   stop_sequence: number;
   track: string | null;
+  note_mark: string | null;
+  note_title: string | null;
+  note_desc: string | null;
+}
+
+// Map the GTFS trips.peak_offpeak flag to the exposed fare_class. Anything other
+// than the two known values (including NULL / undefined pre-migration rows) is
+// reported as null rather than guessed.
+function mapFareClass(peakOffpeak: number | null | undefined): FareClass {
+  if (peakOffpeak === 1) return 'peak';
+  if (peakOffpeak === 0) return 'off_peak';
+  return null;
+}
+
+// Build a StopNote from raw note columns. Prefers note_desc, falls back to
+// note_title, and returns null when neither carries text (so empty notes are
+// omitted rather than surfaced with a blank description).
+function buildNote(columns: Partial<NoteColumns> | null | undefined): StopNote | null {
+  if (!columns) return null;
+  const description = firstNonEmpty(columns.note_desc, columns.note_title);
+  if (!description) return null;
+  return { mark: columns.note_mark ?? null, description };
+}
+
+function firstNonEmpty(...values: Array<string | null | undefined>): string {
+  for (const value of values) {
+    const trimmed = (value ?? '').trim();
+    if (trimmed) return trimmed;
+  }
+  return '';
 }
 
 // Merge a realtime track assignment (when present) with the scheduled track.
@@ -79,6 +126,12 @@ interface StationPairRow {
   destination_sequence: number;
   service_id: string;
   origin_track: string | null;
+  // Trip-level peak/off-peak flag (1 = peak, 0 = off-peak, null = unclassified).
+  peak_offpeak: number | null;
+  // Note joined via the origin stop_time.
+  origin_note_mark: string | null;
+  origin_note_title: string | null;
+  origin_note_desc: string | null;
 }
 
 type StationPairScheduleOptions = {
@@ -197,10 +250,15 @@ export class ScheduleService {
         st.arrival_time,
         st.stop_sequence,
         t.service_id,
-        st.track
+        st.track,
+        t.peak_offpeak,
+        n.note_mark,
+        n.note_title,
+        n.note_desc
       FROM stop_times st
       JOIN trips t ON t.trip_id = st.trip_id
       JOIN routes r ON r.route_id = t.route_id
+      LEFT JOIN notes n ON n.note_id = st.note_id
       WHERE st.stop_id = ?
         AND t.service_id IN (${serviceIds.map(() => '?').join(',')})
         AND st.departure_time >= ?
@@ -262,6 +320,8 @@ export class ScheduleService {
         scheduled_track,
         track_source,
         train_status: trainStatus,
+        fare_class: mapFareClass(row.peak_offpeak),
+        note: buildNote(row),
         status,
         stops,
       });
@@ -301,7 +361,7 @@ export class ScheduleService {
     const trip = sqlite
       .prepare(
         `SELECT t.trip_id, t.route_id, t.trip_headsign, t.direction_id, t.service_id,
-                r.route_long_name
+                t.peak_offpeak, r.route_long_name
          FROM trips t
          JOIN routes r ON r.route_id = t.route_id
          WHERE t.trip_id = ?`
@@ -312,6 +372,7 @@ export class ScheduleService {
         trip_headsign: string | null;
         direction_id: number | null;
         service_id: string;
+        peak_offpeak: number | null;
         route_long_name: string;
       } | undefined;
 
@@ -343,12 +404,15 @@ export class ScheduleService {
       if (calendar.sunday) serviceDays.push('Sunday');
     }
 
-    // Get all stops
+    // Get all stops. LEFT JOIN notes so each stop can surface its note (if any)
+    // without an N+1 lookup; the trip-level rollup is derived from these rows.
     const stopRows = sqlite
       .prepare(
-        `SELECT s.stop_name, s.stop_id, st.arrival_time, st.departure_time, st.stop_sequence, st.track
+        `SELECT s.stop_name, s.stop_id, st.arrival_time, st.departure_time, st.stop_sequence, st.track,
+                n.note_mark, n.note_title, n.note_desc
          FROM stop_times st
          JOIN stops s ON s.stop_id = st.stop_id
+         LEFT JOIN notes n ON n.note_id = st.note_id
          WHERE st.trip_id = ?
          ORDER BY st.stop_sequence`
       )
@@ -402,7 +466,20 @@ export class ScheduleService {
         scheduled_track,
         track_source,
         train_status: trainStatus,
+        note: buildNote(row),
       });
+    }
+
+    // Roll up the distinct notes referenced along the trip, keyed on mark +
+    // description so a note repeated at multiple stops appears once.
+    const tripNotes: StopNote[] = [];
+    const seenNotes = new Set<string>();
+    for (const stop of stops) {
+      if (!stop.note) continue;
+      const key = `${stop.note.mark ?? ''}|${stop.note.description}`;
+      if (seenNotes.has(key)) continue;
+      seenNotes.add(key);
+      tripNotes.push(stop.note);
     }
 
     // Get overall trip delay
@@ -423,7 +500,9 @@ export class ScheduleService {
       route_name: ROUTE_NAMES[trip.route_id] || trip.route_long_name,
       direction: trip.direction_id === 1 ? 'Inbound' : 'Outbound',
       service_days: serviceDays,
+      fare_class: mapFareClass(trip.peak_offpeak),
       stops,
+      notes: tripNotes,
       realtime_status: realtimeStatus,
     };
   }
@@ -473,7 +552,8 @@ export class ScheduleService {
         st.departure_time,
         st.arrival_time,
         st.stop_sequence,
-        t.service_id
+        t.service_id,
+        t.peak_offpeak
       FROM trips t
       JOIN routes r ON r.route_id = t.route_id
       JOIN stop_times st ON st.trip_id = t.trip_id
@@ -498,6 +578,8 @@ export class ScheduleService {
       scheduled_track: null,
       track_source: null,
       train_status: null,
+      fare_class: mapFareClass(row.peak_offpeak),
+      note: null,
       status: 'unknown' as const,
       stops: [],
     }));
@@ -565,13 +647,18 @@ export class ScheduleService {
         origin_st.stop_sequence AS origin_sequence,
         destination_st.stop_sequence AS destination_sequence,
         t.service_id,
-        origin_st.track AS origin_track
+        origin_st.track AS origin_track,
+        t.peak_offpeak,
+        origin_note.note_mark AS origin_note_mark,
+        origin_note.note_title AS origin_note_title,
+        origin_note.note_desc AS origin_note_desc
       FROM trips t
       JOIN routes r ON r.route_id = t.route_id
       JOIN stop_times origin_st ON origin_st.trip_id = t.trip_id
       JOIN stop_times destination_st ON destination_st.trip_id = t.trip_id
       JOIN stops origin_stop ON origin_stop.stop_id = origin_st.stop_id
       JOIN stops destination_stop ON destination_stop.stop_id = destination_st.stop_id
+      LEFT JOIN notes origin_note ON origin_note.note_id = origin_st.note_id
       WHERE origin_st.stop_id = ?
         AND destination_st.stop_id = ?
         AND destination_st.stop_sequence > origin_st.stop_sequence
@@ -785,6 +872,12 @@ export class ScheduleService {
         scheduled_track,
         track_source,
         train_status: trainStatus,
+        fare_class: mapFareClass(row.peak_offpeak),
+        note: buildNote({
+          note_mark: row.origin_note_mark,
+          note_title: row.origin_note_title,
+          note_desc: row.origin_note_desc,
+        }),
         status,
       });
     }

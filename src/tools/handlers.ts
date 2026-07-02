@@ -67,6 +67,8 @@ async function handleGetDepartures(args: Record<string, unknown>, context: ToolC
       track: d.track,
       track_source: d.track_source,
       train_status: d.train_status,
+      fare_class: d.fare_class,
+      note: d.note,
       upcoming_stops: d.stops.slice(0, 5),
       trip_id: d.trip_id,
     })),
@@ -89,6 +91,8 @@ async function handleGetTripDetails(args: Record<string, unknown>, context: Tool
     route: details.route_name,
     direction: details.direction,
     service_days: details.service_days,
+    fare_class: details.fare_class,
+    notes: details.notes,
     stops: details.stops.map((s) => ({
       station: s.stop_name,
       arrival: s.arrival_time,
@@ -97,6 +101,7 @@ async function handleGetTripDetails(args: Record<string, unknown>, context: Tool
       track: s.track,
       track_source: s.track_source,
       train_status: s.train_status,
+      note: s.note,
     })),
     realtime_status: details.realtime_status,
   };
@@ -120,6 +125,7 @@ async function handleGetRouteSchedule(args: Record<string, unknown>, context: To
       trip_id: t.trip_id,
       destination: t.destination,
       departure: t.scheduled_departure,
+      fare_class: t.fare_class,
     })),
     total_trips: schedule.length,
   };
@@ -236,6 +242,8 @@ function formatStationPairTrip(trip: StationPairTrip) {
     track: trip.track,
     track_source: trip.track_source,
     train_status: trip.train_status,
+    fare_class: trip.fare_class,
+    note: trip.note,
     status: trip.status,
   };
 }

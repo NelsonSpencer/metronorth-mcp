@@ -6,7 +6,7 @@ export const toolDefinitions = [
     name: 'get_departures',
     title: 'Get Departures',
     description:
-      'Get upcoming departures from a station, including realtime delays and track assignments when available. Track is the realtime assignment when present, otherwise the scheduled track; at Grand Central tracks typically post ~15-20 minutes before departure.',
+      'Get upcoming departures from a station, including realtime delays and track assignments when available. Track is the realtime assignment when present, otherwise the scheduled track; at Grand Central tracks typically post ~15-20 minutes before departure. Each departure also reports its fare_class (peak or off_peak) and any train note (e.g. "may depart early") when the schedule provides one.',
     inputSchema: ToolInputSchemas.get_departures,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
