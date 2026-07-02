@@ -277,6 +277,21 @@ function formatDirectOption(trip: StationPairTrip) {
   return { itinerary_type: 'direct' as const, ...formatStationPairTrip(trip) };
 }
 
+// A one-transfer itinerary formatted for a trip plan. Each leg is run through the
+// same formatter as direct options so the leg shape matches (route, origin,
+// nested origin_departure) instead of leaking the raw StationPairTrip field names
+// (route_name, origin_station, scheduled_origin_departure). The itinerary-level
+// transfer window, totals, and risk flag pass through unchanged.
+function formatTransferItinerary(itinerary: TransferItinerary) {
+  return {
+    itinerary_type: itinerary.itinerary_type,
+    legs: itinerary.legs.map(formatStationPairTrip),
+    transfer: itinerary.transfer,
+    total_duration_minutes: itinerary.total_duration_minutes,
+    connection_at_risk: itinerary.connection_at_risk,
+  };
+}
+
 function formatStationPairTrip(trip: StationPairTrip) {
   return {
     trip_id: trip.trip_id,
@@ -434,10 +449,15 @@ async function handlePlanMetroNorthTrip(args: Record<string, unknown>, context: 
   // When at least one direct train exists it stays the recommendation and its
   // peers are the alternates; transfers are surfaced separately. When no direct
   // train exists, the best transfer itinerary becomes the recommendation.
+  // `alternate_options` holds only *direct* alternates (empty when there is no
+  // direct train), so transfers are never duplicated across it and
+  // `transfer_options`; the recommended transfer intentionally also appears as
+  // the first `transfer_options` entry.
   const directPlanOptions = directOptions.map(formatDirectOption);
+  const transferPlanOptions = transferOptions.map(formatTransferItinerary);
   const hasDirect = directPlanOptions.length > 0;
-  const recommendedOption = hasDirect ? directPlanOptions[0] : (transferOptions[0] ?? null);
-  const alternateOptions = hasDirect ? directPlanOptions.slice(1) : transferOptions.slice(1);
+  const recommendedOption = hasDirect ? directPlanOptions[0] : (transferPlanOptions[0] ?? null);
+  const alternateOptions = hasDirect ? directPlanOptions.slice(1) : [];
 
   return {
     origin: origin_station,
@@ -446,7 +466,7 @@ async function handlePlanMetroNorthTrip(args: Record<string, unknown>, context: 
     depart_after: depart_after || null,
     recommended_option: recommendedOption,
     alternate_options: alternateOptions,
-    transfer_options: transferOptions,
+    transfer_options: transferPlanOptions,
     alerts,
     data_freshness: status.gtfs_data,
     realtime: {

@@ -2,6 +2,14 @@
 
 All notable project changes are summarized here.
 
+## 2.3.0 - 2026-07-02
+
+- Added transfer-aware trip planning: `plan_metro_north_trip` now returns one-transfer itineraries (via the MTA's guaranteed timed connections at hub stations) when direct trains don't fill the request, with per-leg realtime and a `connection_at_risk` flag when the arriving train's delay may miss the transfer. Transfer legs are formatted like direct options, and `alternate_options` holds only direct alternates so transfers are never duplicated.
+- Added a `get_accessibility_status` tool that reports Metro-North elevator/escalator/accessibility alerts, with an honest caveat that the MTA publishes no machine-readable Metro-North outage feed so the data is derived from free-text alerts and may be incomplete.
+- Scoped Metro-North alerts correctly: the shared MTA all-alerts feed multiplexes every operator, and NYC subway lines 1-6 collide with Metro-North route ids 1-6. Alerts are now matched by agency (and route_type when present) instead of a bare route id, so subway alerts (e.g. "[2][3] skips Clark St") no longer leak into `get_service_alerts` or `get_accessibility_status`.
+- Decoded GTFS-RT enum fields to their string names, so `Alert.effect`/`cause` surface readable values (e.g. `ACCESSIBILITY_ISSUE`) instead of numeric codes.
+- Added prompt-argument and station-resource-template completions (`completion/complete`) so hosts can autocomplete prompt arguments and station identifiers.
+
 ## 2.2.0 - 2026-07-02
 
 - Surfaced real-time track assignments and human-readable train status by decoding the MTA Railroad GTFS-RT extension (`StopTimeUpdate` field 1005); a `cancelled` train status is treated as authoritative.

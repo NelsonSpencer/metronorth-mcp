@@ -117,8 +117,20 @@ describe('plan_metro_north_trip with transfers', () => {
     });
     expect(result.structuredContent?.alternate_options).toHaveLength(0);
     expect(result.structuredContent?.transfer_options).toHaveLength(1);
-    const transfers = result.structuredContent?.transfer_options as TransferItinerary[];
+    const transfers = result.structuredContent?.transfer_options as Array<Record<string, unknown>>;
     expect(transfers[0].itinerary_type).toBe('one_transfer');
+    // Legs are normalized to the direct-option shape: `route` present,
+    // raw StationPairTrip field names (route_name/origin_station) absent.
+    const legs = transfers[0].legs as Array<Record<string, unknown>>;
+    expect(legs[0].route).toBe('Harlem');
+    expect(legs[0].route_name).toBeUndefined();
+    expect(legs[0].origin).toBe('Grand Central Terminal');
+    expect(legs[0].origin_station).toBeUndefined();
+    expect(legs[0].origin_departure).toMatchObject({ scheduled: '17:00' });
+    // Itinerary-level fields still pass through unchanged.
+    expect(transfers[0].total_duration_minutes).toBe(70);
+    expect(transfers[0].connection_at_risk).toBe(false);
+    expect(transfers[0].transfer).toMatchObject({ station: 'Stamford', wait_minutes: 15 });
   });
 
   it('recommends the best transfer itinerary when no direct trip exists', async () => {
@@ -135,10 +147,15 @@ describe('plan_metro_north_trip with transfers', () => {
     });
 
     expect(result.isError).toBeUndefined();
-    expect(result.structuredContent?.recommended_option).toMatchObject({
-      itinerary_type: 'one_transfer',
-    });
-    expect(result.structuredContent?.alternate_options).toHaveLength(1);
+    const recommended = result.structuredContent?.recommended_option as Record<string, unknown>;
+    expect(recommended).toMatchObject({ itinerary_type: 'one_transfer' });
+    // The recommended transfer's legs are formatted like direct options.
+    const recommendedLegs = recommended.legs as Array<Record<string, unknown>>;
+    expect(recommendedLegs[0].route).toBe('Harlem');
+    expect(recommendedLegs[0].route_name).toBeUndefined();
+    // Alternates are direct-only, so they are empty when no direct train exists.
+    // Transfers are never duplicated into alternate_options.
+    expect(result.structuredContent?.alternate_options).toHaveLength(0);
     expect(result.structuredContent?.transfer_options).toHaveLength(2);
   });
 
