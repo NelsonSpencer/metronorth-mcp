@@ -137,7 +137,15 @@ describe("MetroNorthRealtime", () => {
       ),
     ).toBe(true);
     expect(dbRunMock).toHaveBeenCalledWith();
-    expect(dbRunMock).toHaveBeenCalledWith("trip-1", "GCT", null, 120, null);
+    expect(dbRunMock).toHaveBeenCalledWith(
+      "trip-1",
+      "GCT",
+      null,
+      120,
+      null,
+      null,
+      null,
+    );
   });
 
   it("preserves explicit zero delays from realtime trip updates", async () => {
@@ -200,7 +208,119 @@ describe("MetroNorthRealtime", () => {
     ]);
     expect(arrivalInfo).toMatchObject({ delaySeconds: 0, status: "on_time" });
     expect(departureInfo).toMatchObject({ delaySeconds: 0, status: "on_time" });
-    expect(dbRunMock).toHaveBeenCalledWith("trip-1", "GCT", 0, null, null);
-    expect(dbRunMock).toHaveBeenCalledWith("trip-1", "WP", null, 0, null);
+    expect(dbRunMock).toHaveBeenCalledWith(
+      "trip-1",
+      "GCT",
+      0,
+      null,
+      null,
+      null,
+      null,
+    );
+    expect(dbRunMock).toHaveBeenCalledWith(
+      "trip-1",
+      "WP",
+      null,
+      0,
+      null,
+      null,
+      null,
+    );
+  });
+});
+
+describe("MetroNorthRealtime absolute-time delay handling", () => {
+  // Epoch seconds for these scheduled times on service date 2024-01-01 (EST):
+  //   12:00:00 -> 1704128400 ; 25:10:00 (next-day 01:10) -> 1704175800
+  const NOON_EPOCH = 1704128400;
+  const AFTER_MIDNIGHT_EPOCH = 1704175800;
+
+  beforeEach(() => {
+    axiosGetMock.mockReset();
+    axiosGetMock.mockResolvedValue({ data: new ArrayBuffer(0) });
+    decodeMock.mockReset();
+    cacheGetMock.mockReset();
+    cacheGetMock.mockResolvedValue(null);
+    cacheSetMock.mockReset();
+    cacheSetMock.mockResolvedValue(undefined);
+    dbRunMock.mockReset();
+    preparedQueries.length = 0;
+  });
+
+  async function infoForStopTimeUpdate(
+    stopTimeUpdate: Record<string, unknown>,
+    scheduledTime: string,
+  ) {
+    decodeMock.mockReturnValue({
+      entity: [
+        {
+          id: "100",
+          tripUpdate: {
+            trip: { tripId: "trip-x", routeId: "2", startDate: "20240101" },
+            stopTimeUpdate: [{ stopId: "GCT", ...stopTimeUpdate }],
+          },
+        },
+      ],
+    });
+
+    const { MetroNorthRealtime } =
+      await import("../src/infrastructure/realtime-client.js");
+    const client = new MetroNorthRealtime();
+    const updates = await client.getTripUpdates();
+
+    return client.getRealtimeInfoForTripAtStopFromUpdates(
+      updates,
+      "trip-x",
+      "GCT",
+      scheduledTime,
+      "100",
+    );
+  }
+
+  it("derives delay from absolute departure time for normal same-day trips", async () => {
+    const info = await infoForStopTimeUpdate(
+      {
+        departure: { time: String(NOON_EPOCH + 300) },
+        track: "7",
+        trainStatus: "Delayed",
+      },
+      "12:00:00",
+    );
+
+    expect(info.delaySeconds).toBe(300);
+    expect(info.status).toBe("delayed");
+    expect(info.track).toBe("7");
+    expect(info.trainStatus).toBe("Delayed");
+  });
+
+  it("derives absolute-time delay for after-midnight 25:xx schedules near the rollover", async () => {
+    const info = await infoForStopTimeUpdate(
+      { departure: { time: String(AFTER_MIDNIGHT_EPOCH + 180) } },
+      "25:10:00",
+    );
+
+    expect(info.delaySeconds).toBe(180);
+    expect(info.status).toBe("delayed");
+  });
+
+  it("prefers an explicit delay over the absolute-time derivation", async () => {
+    // Absolute time implies +300s, but the explicit delay of 500s must win.
+    const info = await infoForStopTimeUpdate(
+      { departure: { delay: 500, time: String(NOON_EPOCH + 300) } },
+      "12:00:00",
+    );
+
+    expect(info.delaySeconds).toBe(500);
+    expect(info.status).toBe("delayed");
+  });
+
+  it("treats an absolute-time delay of 60s or less as on time", async () => {
+    const info = await infoForStopTimeUpdate(
+      { departure: { time: String(NOON_EPOCH + 30) } },
+      "12:00:00",
+    );
+
+    expect(info.delaySeconds).toBe(30);
+    expect(info.status).toBe("on_time");
   });
 });

@@ -64,6 +64,9 @@ async function handleGetDepartures(args: Record<string, unknown>, context: ToolC
       actual: d.actual_departure || d.scheduled_departure,
       delay: d.delay_minutes ? `${d.delay_minutes} min late` : null,
       status: d.status,
+      track: d.track,
+      track_source: d.track_source,
+      train_status: d.train_status,
       upcoming_stops: d.stops.slice(0, 5),
       trip_id: d.trip_id,
     })),
@@ -91,6 +94,9 @@ async function handleGetTripDetails(args: Record<string, unknown>, context: Tool
       arrival: s.arrival_time,
       departure: s.departure_time,
       delay: s.delay_minutes ? `${s.delay_minutes} min` : null,
+      track: s.track,
+      track_source: s.track_source,
+      train_status: s.train_status,
     })),
     realtime_status: details.realtime_status,
   };
@@ -227,6 +233,9 @@ function formatStationPairTrip(trip: StationPairTrip) {
       delay_minutes: trip.destination_delay_minutes,
     },
     duration_minutes: trip.duration_minutes,
+    track: trip.track,
+    track_source: trip.track_source,
+    train_status: trip.train_status,
     status: trip.status,
   };
 }

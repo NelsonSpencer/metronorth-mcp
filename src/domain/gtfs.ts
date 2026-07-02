@@ -128,7 +128,15 @@ export interface StopTimeUpdate {
   stop_id: string | null;
   arrival_delay: number | null;
   departure_delay: number | null;
+  // Absolute predicted times in epoch seconds (GTFS-RT StopTimeEvent.time).
+  // MNR populates these even when the relative delay is omitted, so they are
+  // the basis for the absolute-time delay fallback in the realtime client.
+  arrival_time: number | null;
+  departure_time: number | null;
   schedule_relationship: string | null;
+  // MTA Railroad extension (field 1005): assigned track and raw train status.
+  track: string | null;
+  train_status: string | null;
 }
 
 export interface ServiceAlert {
@@ -481,7 +489,14 @@ export interface DepartureInfo {
   scheduled_departure: string;
   actual_departure: string | null;
   delay_minutes: number | null;
+  // Resolved boarding track (realtime assignment when present, else scheduled).
+  // `platform` mirrors `track` for backward compatibility with the field that
+  // previously existed on this type.
   platform: string | null;
+  track: string | null;
+  scheduled_track: string | null;
+  track_source: 'realtime' | 'scheduled' | null;
+  train_status: string | null;
   status: 'on_time' | 'delayed' | 'cancelled' | 'unknown';
   stops: string[];
 }
@@ -512,6 +527,10 @@ export interface TripStop {
   departure_time: string;
   stop_sequence: number;
   delay_minutes: number | null;
+  track: string | null;
+  scheduled_track: string | null;
+  track_source: 'realtime' | 'scheduled' | null;
+  train_status: string | null;
 }
 
 export interface TripRealtimeStatus {
@@ -535,6 +554,12 @@ export interface StationPairTrip {
   duration_minutes: number;
   origin_delay_minutes: number | null;
   destination_delay_minutes: number | null;
+  // Boarding track at the origin station: realtime assignment when present,
+  // otherwise the scheduled track from stop_times.
+  track: string | null;
+  scheduled_track: string | null;
+  track_source: 'realtime' | 'scheduled' | null;
+  train_status: string | null;
   status: 'on_time' | 'delayed' | 'cancelled' | 'unknown';
 }
 

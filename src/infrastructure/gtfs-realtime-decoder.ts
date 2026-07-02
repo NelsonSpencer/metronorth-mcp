@@ -45,6 +45,10 @@ export interface GTFSRTStopTimeUpdate {
     time?: string;
   };
   scheduleRelationship?: string;
+  // MTA Railroad extension (field 1005): assigned track and human-readable
+  // train status. Undefined when the feed omits the extension.
+  track?: string;
+  trainStatus?: string;
 }
 
 export interface GTFSRTAlert {
@@ -95,6 +99,11 @@ interface DecodedTripUpdate {
   timestamp?: string | number;
 }
 
+interface DecodedMnrStopTimeUpdate {
+  track?: string;
+  trainStatus?: string;
+}
+
 interface DecodedStopTimeUpdate {
   stopSequence?: number;
   stopId?: string;
@@ -107,6 +116,10 @@ interface DecodedStopTimeUpdate {
     time?: string | number;
   };
   scheduleRelationship?: number | string;
+  // protobufjs surfaces the field-1005 extension under its fully-qualified key;
+  // some tooling paths expose the camelCased name, so both are read defensively.
+  '.transit_realtime.mnrStopTimeUpdate'?: DecodedMnrStopTimeUpdate;
+  mnrStopTimeUpdate?: DecodedMnrStopTimeUpdate;
 }
 
 interface DecodedAlert {
@@ -177,27 +190,35 @@ function normalizeTripUpdate(tripUpdate: DecodedTripUpdate): GTFSRTTripUpdate {
           label: tripUpdate.vehicle.label || undefined,
         }
       : undefined,
-    stopTimeUpdate: (tripUpdate.stopTimeUpdate || []).map((stopTimeUpdate) => ({
-      stopSequence: stopTimeUpdate.stopSequence || undefined,
-      stopId: stopTimeUpdate.stopId || undefined,
-      arrival: stopTimeUpdate.arrival
-        ? {
-            delay: stopTimeUpdate.arrival.delay ?? undefined,
-            time: stopTimeUpdate.arrival.time
-              ? String(stopTimeUpdate.arrival.time)
-              : undefined,
-          }
-        : undefined,
-      departure: stopTimeUpdate.departure
-        ? {
-            delay: stopTimeUpdate.departure.delay ?? undefined,
-            time: stopTimeUpdate.departure.time
-              ? String(stopTimeUpdate.departure.time)
-              : undefined,
-          }
-        : undefined,
-      scheduleRelationship: String(stopTimeUpdate.scheduleRelationship || ""),
-    })),
+    stopTimeUpdate: (tripUpdate.stopTimeUpdate || []).map((stopTimeUpdate) => {
+      const mnr =
+        stopTimeUpdate[".transit_realtime.mnrStopTimeUpdate"] ??
+        stopTimeUpdate.mnrStopTimeUpdate;
+
+      return {
+        stopSequence: stopTimeUpdate.stopSequence || undefined,
+        stopId: stopTimeUpdate.stopId || undefined,
+        arrival: stopTimeUpdate.arrival
+          ? {
+              delay: stopTimeUpdate.arrival.delay ?? undefined,
+              time: stopTimeUpdate.arrival.time
+                ? String(stopTimeUpdate.arrival.time)
+                : undefined,
+            }
+          : undefined,
+        departure: stopTimeUpdate.departure
+          ? {
+              delay: stopTimeUpdate.departure.delay ?? undefined,
+              time: stopTimeUpdate.departure.time
+                ? String(stopTimeUpdate.departure.time)
+                : undefined,
+            }
+          : undefined,
+        scheduleRelationship: String(stopTimeUpdate.scheduleRelationship || ""),
+        track: mnr?.track || undefined,
+        trainStatus: mnr?.trainStatus || undefined,
+      };
+    }),
     timestamp: tripUpdate.timestamp ? String(tripUpdate.timestamp) : undefined,
   };
 }

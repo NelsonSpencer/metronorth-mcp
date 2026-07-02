@@ -31,6 +31,7 @@ interface ScheduleRow {
   arrival_time: string;
   stop_sequence: number;
   service_id: string;
+  track: string | null;
 }
 
 interface TripStopRow {
@@ -39,6 +40,26 @@ interface TripStopRow {
   arrival_time: string;
   departure_time: string;
   stop_sequence: number;
+  track: string | null;
+}
+
+// Merge a realtime track assignment (when present) with the scheduled track.
+// Realtime wins; track_source records which source produced the resolved value.
+function resolveTrack(
+  realtimeTrack: string | null,
+  scheduledTrack: string | null
+): {
+  track: string | null;
+  scheduled_track: string | null;
+  track_source: 'realtime' | 'scheduled' | null;
+} {
+  if (realtimeTrack) {
+    return { track: realtimeTrack, scheduled_track: scheduledTrack, track_source: 'realtime' };
+  }
+  if (scheduledTrack) {
+    return { track: scheduledTrack, scheduled_track: scheduledTrack, track_source: 'scheduled' };
+  }
+  return { track: null, scheduled_track: null, track_source: null };
 }
 
 interface StationPairRow {
@@ -57,6 +78,7 @@ interface StationPairRow {
   origin_sequence: number;
   destination_sequence: number;
   service_id: string;
+  origin_track: string | null;
 }
 
 type StationPairScheduleOptions = {
@@ -174,7 +196,8 @@ export class ScheduleService {
         st.departure_time,
         st.arrival_time,
         st.stop_sequence,
-        t.service_id
+        t.service_id,
+        st.track
       FROM stop_times st
       JOIN trips t ON t.trip_id = st.trip_id
       JOIN routes r ON r.route_id = t.route_id
@@ -197,6 +220,8 @@ export class ScheduleService {
     for (const row of rows) {
       let delayMinutes: number | null = null;
       let status: DepartureInfo['status'] = 'unknown';
+      let realtimeTrack: string | null = null;
+      let trainStatus: string | null = null;
 
       if (realtimeUpdates) {
         // Use trip_short_name (train number) to match realtime data
@@ -212,6 +237,8 @@ export class ScheduleService {
           delayMinutes = Math.round(realtimeInfo.delaySeconds / 60);
         }
         status = realtimeInfo.status as DepartureInfo['status'];
+        realtimeTrack = realtimeInfo.track;
+        trainStatus = realtimeInfo.trainStatus;
       }
 
       // Get destination stops
@@ -221,6 +248,8 @@ export class ScheduleService {
       const actualDeparture =
         delayMinutes !== null ? addMinutesToGtfsTime(row.departure_time, delayMinutes) : null;
 
+      const { track, scheduled_track, track_source } = resolveTrack(realtimeTrack, row.track);
+
       departures.push({
         trip_id: row.trip_id,
         route_name: ROUTE_NAMES[row.route_id] || row.route_long_name,
@@ -228,7 +257,11 @@ export class ScheduleService {
         scheduled_departure: formatGtfsTimeForDisplay(row.departure_time),
         actual_departure: actualDeparture,
         delay_minutes: delayMinutes,
-        platform: null,
+        platform: track,
+        track,
+        scheduled_track,
+        track_source,
+        train_status: trainStatus,
         status,
         stops,
       });
@@ -313,7 +346,7 @@ export class ScheduleService {
     // Get all stops
     const stopRows = sqlite
       .prepare(
-        `SELECT s.stop_name, s.stop_id, st.arrival_time, st.departure_time, st.stop_sequence
+        `SELECT s.stop_name, s.stop_id, st.arrival_time, st.departure_time, st.stop_sequence, st.track
          FROM stop_times st
          JOIN stops s ON s.stop_id = st.stop_id
          WHERE st.trip_id = ?
@@ -330,6 +363,8 @@ export class ScheduleService {
     const stops: TripStop[] = [];
     for (const row of stopRows) {
       let delayMinutes: number | null = null;
+      let realtimeTrack: string | null = null;
+      let trainStatus: string | null = null;
 
       if (realtimeUpdates) {
         delayMinutes = realtimeClient.getDelayForTripAtStopFromUpdates(
@@ -340,7 +375,21 @@ export class ScheduleService {
         if (delayMinutes !== null) {
           delayMinutes = Math.round(delayMinutes / 60);
         }
+
+        // Realtime track and train status come from the stop-level info; delay is
+        // kept from the dedicated helper so absent updates stay null (rather than
+        // collapsing to an on-time 0) for stops the train has not reached.
+        const realtimeInfo = realtimeClient.getRealtimeInfoForTripAtStopFromUpdates(
+          realtimeUpdates,
+          tripId,
+          row.stop_id,
+          row.departure_time
+        );
+        realtimeTrack = realtimeInfo.track;
+        trainStatus = realtimeInfo.trainStatus;
       }
+
+      const { track, scheduled_track, track_source } = resolveTrack(realtimeTrack, row.track);
 
       stops.push({
         stop_name: row.stop_name,
@@ -349,6 +398,10 @@ export class ScheduleService {
         departure_time: formatGtfsTimeForDisplay(row.departure_time),
         stop_sequence: row.stop_sequence,
         delay_minutes: delayMinutes,
+        track,
+        scheduled_track,
+        track_source,
+        train_status: trainStatus,
       });
     }
 
@@ -441,6 +494,10 @@ export class ScheduleService {
       actual_departure: null,
       delay_minutes: null,
       platform: null,
+      track: null,
+      scheduled_track: null,
+      track_source: null,
+      train_status: null,
       status: 'unknown' as const,
       stops: [],
     }));
@@ -507,7 +564,8 @@ export class ScheduleService {
         destination_st.arrival_time AS destination_arrival_time,
         origin_st.stop_sequence AS origin_sequence,
         destination_st.stop_sequence AS destination_sequence,
-        t.service_id
+        t.service_id,
+        origin_st.track AS origin_track
       FROM trips t
       JOIN routes r ON r.route_id = t.route_id
       JOIN stop_times origin_st ON origin_st.trip_id = t.trip_id
@@ -662,6 +720,8 @@ export class ScheduleService {
       let originDelayMinutes: number | null = null;
       let destinationDelayMinutes: number | null = null;
       let status: StationPairTrip['status'] = 'unknown';
+      let originRealtimeTrack: string | null = null;
+      let trainStatus: string | null = null;
 
       if (realtimeUpdates) {
         const originRealtime = realtimeClient.getRealtimeInfoForTripAtStopFromUpdates(
@@ -686,11 +746,19 @@ export class ScheduleService {
           destinationDelayMinutes = Math.round(destinationRealtime.delaySeconds / 60);
         }
         status = originRealtime.status as StationPairTrip['status'];
+        originRealtimeTrack = originRealtime.track;
+        trainStatus = originRealtime.trainStatus;
       }
 
       const durationMinutes = Math.round(
         (parseGtfsTime(row.destination_arrival_time) - parseGtfsTime(row.origin_departure_time)) /
           60
+      );
+
+      // Boarding track is the origin-station track (realtime assignment wins).
+      const { track, scheduled_track, track_source } = resolveTrack(
+        originRealtimeTrack,
+        row.origin_track
       );
 
       trips.push({
@@ -713,6 +781,10 @@ export class ScheduleService {
         duration_minutes: durationMinutes,
         origin_delay_minutes: originDelayMinutes,
         destination_delay_minutes: destinationDelayMinutes,
+        track,
+        scheduled_track,
+        track_source,
+        train_status: trainStatus,
         status,
       });
     }

@@ -12,7 +12,7 @@ let sqlite: Database.Database | null = null;
 // runMigrations) whenever the GTFS schema changes so that databases created by
 // older versions upgrade in place. Databases predating schema versioning report
 // no `schema_version` metadata and are treated as version 1.
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 // Metadata key holding the applied schema version.
 const SCHEMA_VERSION_KEY = 'schema_version';
@@ -187,6 +187,8 @@ function initializeSchema() {
       arrival_delay INTEGER,
       departure_delay INTEGER,
       schedule_relationship TEXT,
+      track TEXT,
+      train_status TEXT,
       updated_at TEXT DEFAULT (datetime('now')),
       PRIMARY KEY (trip_id, stop_id)
     );
@@ -230,20 +232,38 @@ function runMigrations() {
 
   logger.info({ from: currentVersion, to: SCHEMA_VERSION }, 'Migrating database schema');
 
+  // Only static-GTFS column/table additions need a one-time re-ingest to
+  // populate; transient realtime columns do not.
+  let forceGtfsRefresh = false;
+
   // v1 -> v2: surface GTFS fields the loader previously dropped. New tables
   // (transfers, notes) already exist via CREATE TABLE IF NOT EXISTS above; these
   // columns must be ALTERed onto tables that predate v2.
-  addColumnIfMissing('stop_times', 'track', 'TEXT');
-  addColumnIfMissing('stop_times', 'note_id', 'TEXT');
-  addColumnIfMissing('trips', 'peak_offpeak', 'INTEGER');
+  if (currentVersion < 2) {
+    addColumnIfMissing('stop_times', 'track', 'TEXT');
+    addColumnIfMissing('stop_times', 'note_id', 'TEXT');
+    addColumnIfMissing('trips', 'peak_offpeak', 'INTEGER');
+    // These new static columns must be backfilled from a fresh GTFS ingest.
+    forceGtfsRefresh = true;
+  }
+
+  // v2 -> v3: realtime track + train status from the MTA Railroad extension.
+  // realtime_updates is transient (rewritten on every feed fetch), so no GTFS
+  // refresh is required for these columns.
+  if (currentVersion < 3) {
+    addColumnIfMissing('realtime_updates', 'track', 'TEXT');
+    addColumnIfMissing('realtime_updates', 'train_status', 'TEXT');
+  }
 
   setMetadata(SCHEMA_VERSION_KEY, String(SCHEMA_VERSION));
-  // Force a one-time GTFS re-ingest so the newly added columns/tables populate.
-  setMetadata(GTFS_FORCE_REFRESH_KEY, '1');
+  if (forceGtfsRefresh) {
+    // Force a one-time GTFS re-ingest so the newly added static columns populate.
+    setMetadata(GTFS_FORCE_REFRESH_KEY, '1');
+  }
 
   logger.info(
-    { version: SCHEMA_VERSION },
-    'Database schema migration complete; GTFS refresh forced'
+    { version: SCHEMA_VERSION, gtfsRefreshForced: forceGtfsRefresh },
+    'Database schema migration complete'
   );
 }
 

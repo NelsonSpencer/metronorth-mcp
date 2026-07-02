@@ -56,6 +56,33 @@ function createV1Database(dbPath: string): void {
   db.close();
 }
 
+// Recreate a v2 database: schema_version = 2 and a realtime_updates table that
+// predates the v3 track/train_status columns.
+function createV2Database(dbPath: string): void {
+  const db = new Database(dbPath);
+  db.exec(`
+    CREATE TABLE metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE realtime_updates (
+      trip_id TEXT NOT NULL,
+      stop_id TEXT NOT NULL,
+      arrival_delay INTEGER,
+      departure_delay INTEGER,
+      schedule_relationship TEXT,
+      updated_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (trip_id, stop_id)
+    );
+  `);
+  db.prepare(`INSERT INTO metadata (key, value) VALUES ('schema_version', '2')`).run();
+  db.prepare(`INSERT INTO metadata (key, value) VALUES ('gtfs_last_update', ?)`).run(
+    new Date().toISOString()
+  );
+  db.close();
+}
+
 function columnNames(sqlite: Database.Database, table: string): string[] {
   return (sqlite.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(
     (c) => c.name
@@ -106,6 +133,28 @@ describe('schema migration', () => {
     // Schema version recorded and a refresh forced so the columns get populated.
     expect(getMetadata('schema_version')).toBe(String(SCHEMA_VERSION));
     expect(getMetadata(GTFS_FORCE_REFRESH_KEY)).toBe('1');
+
+    closeDatabase();
+  });
+
+  it('adds v3 realtime columns in place without forcing a GTFS refresh', async () => {
+    createV2Database(dbPath);
+
+    const { getDatabase, getSqlite, getMetadata, closeDatabase, SCHEMA_VERSION, GTFS_FORCE_REFRESH_KEY } =
+      await import('../src/infrastructure/database.js');
+
+    getDatabase();
+    const sqlite = getSqlite();
+
+    // Transient realtime columns ALTERed onto the pre-existing table.
+    expect(columnNames(sqlite, 'realtime_updates')).toEqual(
+      expect.arrayContaining(['track', 'train_status'])
+    );
+
+    // Schema version advances, but a transient-table change must NOT force a
+    // one-time GTFS re-ingest.
+    expect(getMetadata('schema_version')).toBe(String(SCHEMA_VERSION));
+    expect(getMetadata(GTFS_FORCE_REFRESH_KEY)).toBeNull();
 
     closeDatabase();
   });
