@@ -2,6 +2,13 @@
 
 All notable project changes are summarized here.
 
+## 2.1.4 - 2026-06-27
+
+- Added an opt-in, vendor-neutral Streamable HTTP transport (`--http`) so any remote MCP host or assistant that speaks Streamable HTTP (for example Poke) can connect via a local tunnel or a self-hosted HTTPS URL. stdio remains the default; existing stdio clients are unaffected.
+- Kept the transport safe by default: loopback bind (`127.0.0.1`), DNS-rebinding protection with an explicit Host allow-list, optional bearer-token auth, a request-body cap, and request/headers timeouts. Errors return generic JSON without stack traces.
+- Added CLI flags (`--http`, `--host`, `--port`, `--token`, `--allowed-hosts`, `--allowed-origins`, `--help`) and `MCP_HTTP*` environment fallbacks; CLI flags take precedence.
+- Documented the transport in the README, `.env.example`, and a new `docs/http-transport.md` reference. The capability stays local and user-run; there is still no maintainer-operated hosted endpoint.
+
 ## 2.1.3 - 2026-06-27
 
 - Documented deferred major dependency upgrades and added a Dependabot `ignore` rule so major npm bumps are held back deliberately rather than auto-proposed (`.github/dependabot.yml`, `docs/dependency-upgrades.md`).

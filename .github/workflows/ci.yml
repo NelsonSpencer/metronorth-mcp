@@ -73,3 +73,6 @@ jobs:
 
       - name: MCP smoke
         run: npm run smoke:mcp
+
+      - name: MCP smoke (http)
+        run: npm run smoke:http

@@ -50,6 +50,9 @@ jobs:
       - name: MCP smoke
         run: npm run smoke:mcp
 
+      - name: MCP smoke (http)
+        run: npm run smoke:http
+
       - name: Verify package contents
         run: npm pack --dry-run
 
